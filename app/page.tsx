@@ -298,7 +298,7 @@ export default function Page() {
   const pc = filterValues['pv.priceChangePctN'];
   const priceColTitle = pc?.days ? `Price (${pc.days} days % change)` : 'Price';
 
-  /** ===== UI ===== */
+ /** ===== UI ===== */
   return (
     <main style={{ maxWidth: 1150, margin: '40px auto', padding: 16 }}>
       {/* Header */}
