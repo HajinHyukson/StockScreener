@@ -25,9 +25,9 @@ type Row = {
   explain?: { id: string; pass: boolean; value?: string }[];
 };
 
-type SortKey = 'symbol' | 'companyName' | 'price' | 'marketCap' | 'sector' | 'volume' | 'priceChangePct';
+type SortKey = 'symbol' | 'companyName' | 'price' | 'marketCap' | 'sector' | 'priceChangePct';
 
-/** ================= Format helpers ================= */
+/** ================= Helpers ================= */
 function formatInt(n?: number) {
   if (typeof n !== 'number' || !isFinite(n)) return '—';
   return n.toLocaleString('en-US');
@@ -42,7 +42,7 @@ function formatPct(n?: number) {
   return `${sign}${n.toFixed(2)}%`;
 }
 
-/** ================= Build AST (UI → AST) ================= */
+/** Build AST (UI → AST) */
 function buildAstFromFilters(opts: {
   exchange: string;
   sector: string;
@@ -50,8 +50,6 @@ function buildAstFromFilters(opts: {
   mktMax: string;
   priceChangePctMin: string;
   priceChangeDays: string;
-  volChangePctMin: string;
-  volChangeDays: string;
 }): RuleAST {
   const children: RuleAST[] = [];
 
@@ -76,13 +74,6 @@ function buildAstFromFilters(opts: {
       children.push({ type: 'condition', id: 'pv.priceChangePctN', params: { pct, days } });
     }
   }
-  if (opts.volChangePctMin && opts.volChangeDays) {
-    const pct = Number(opts.volChangePctMin);
-    const days = Number(opts.volChangeDays);
-    if (Number.isFinite(pct) && Number.isFinite(days) && days > 0) {
-      children.push({ type: 'condition', id: 'pv.volumeChangePctN', params: { pct, days } });
-    }
-  }
 
   if (children.length === 0) {
     return { type: 'condition', id: 'base.exchange', params: { value: opts.exchange || 'NASDAQ' } };
@@ -90,7 +81,7 @@ function buildAstFromFilters(opts: {
   return children.length === 1 ? children[0] : { type: 'AND', children };
 }
 
-/** ================= Apply AST (AST → UI) ================= */
+/** Apply AST (AST → UI) */
 function applyAstToFilters(ast: RuleAST, set: {
   setExchange: (v: string) => void;
   setSector: (v: string) => void;
@@ -98,8 +89,6 @@ function applyAstToFilters(ast: RuleAST, set: {
   setMktMax: (v: string) => void;
   setPriceChangePctMin: (v: string) => void;
   setPriceChangeDays: (v: string) => void;
-  setVolChangePctMin: (v: string) => void;
-  setVolChangeDays: (v: string) => void;
 }) {
   function walk(node: RuleAST) {
     if (!node) return;
@@ -122,10 +111,6 @@ function applyAstToFilters(ast: RuleAST, set: {
           if (typeof params.pct === 'number') set.setPriceChangePctMin(String(params.pct));
           if (typeof params.days === 'number') set.setPriceChangeDays(String(params.days));
           break;
-        case 'pv.volumeChangePctN':
-          if (typeof params.pct === 'number') set.setVolChangePctMin(String(params.pct));
-          if (typeof params.days === 'number') set.setVolChangeDays(String(params.days));
-          break;
       }
       return;
     }
@@ -136,7 +121,7 @@ function applyAstToFilters(ast: RuleAST, set: {
   walk(ast);
 }
 
-/** ================= Summarize AST (for “View” modal) ================= */
+/** Summarize AST (for “View Rule”) */
 function summarizeAst(ast: RuleAST) {
   const out: Record<string, string> = {};
   function put(key: string, val: any) {
@@ -153,9 +138,6 @@ function summarizeAst(ast: RuleAST) {
       else if (id === 'pv.priceChangePctN') {
         put('Price change ≥ (%)', params.pct);
         put('Over last (days)', params.days);
-      } else if (id === 'pv.volumeChangePctN') {
-        put('Volume change ≥ (%)', params.pct);
-        put('Over last (days) [volume]', params.days);
       }
       return;
     }
@@ -167,27 +149,43 @@ function summarizeAst(ast: RuleAST) {
   return out;
 }
 
+/** Market cap options builder */
+function marketCapOptions(): { label: string; value: string }[] {
+  const opts: { label: string; value: string }[] = [{ label: 'Any', value: '' }];
+  // 500M
+  opts.push({ label: '$500M', value: String(500_000_000) });
+  // 500B steps up to 5T
+  for (let v = 500_000_000_000; v <= 5_000_000_000_000; v += 500_000_000_000) {
+    const trillions = v / 1_000_000_000_000;
+    const billions = v / 1_000_000_000;
+    const label = v >= 1_000_000_000_000 ? `$${trillions}T` : `$${billions}B`;
+    opts.push({ label, value: String(v) });
+  }
+  return opts;
+}
+
 /** ================= Page Component ================= */
 export default function Page() {
   // Filters
   const [exchange, setExchange] = useState('NASDAQ');
   const [sector, setSector] = useState('');
-  const [mktMin, setMktMin] = useState('10000000000');
+  const [mktMin, setMktMin] = useState('10000000000'); // default $10B
   const [mktMax, setMktMax] = useState('');
   const [priceChangePctMin, setPriceChangePctMin] = useState('');
   const [priceChangeDays, setPriceChangeDays] = useState('');
-  const [volChangePctMin, setVolChangePctMin] = useState('');
-  const [volChangeDays, setVolChangeDays] = useState('');
 
-  // Data
-  const [limit, setLimit] = useState('25');
+  // Data & server pagination
+  const [serverLimit, setServerLimit] = useState(50); // hidden default = 50
   const [rows, setRows] = useState<Row[]>([]);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [hasMore, setHasMore] = useState(true);
 
-  // Sorting/paging
-  const [sortBy, setSortBy] = useState<SortKey>('marketCap');
+  // Sorting UI
+  const [sortKey, setSortKey] = useState<SortKey>('marketCap');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
+
+  // Client paging (table pagination)
   const [page, setPage] = useState(1);
   const pageSize = 25;
 
@@ -198,22 +196,21 @@ export default function Page() {
   const [loadingRules, setLoadingRules] = useState(false);
   const [rulesError, setRulesError] = useState<string | null>(null);
 
-  // View Rule modal
+  // Modals
   const [viewOpen, setViewOpen] = useState(false);
   const [viewData, setViewData] = useState<{ name: string; fields: Record<string, string> } | null>(null);
-
-  // Explain modal (per result row)
   const [explainOpen, setExplainOpen] = useState(false);
   const [explainRow, setExplainRow] = useState<Row | null>(null);
 
-  /** --------- Backend runner (/api/run) --------- */
-  async function runWithAst(ast: RuleAST) {
-    setLoading(true); setErr(null); setPage(1);
+  /** Backend runner (/api/run) */
+  async function runWithAst(ast: RuleAST, nextLimit?: number, append = false) {
+    setLoading(true); setErr(null);
+    const requestedLimit = Number.isFinite(nextLimit as number) ? (nextLimit as number) : serverLimit;
     try {
       const res = await fetch('/api/run', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ast, limit: Number(limit) || 25 })
+        body: JSON.stringify({ ast, limit: requestedLimit })
       });
       const json = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -221,10 +218,27 @@ export default function Page() {
         const detail = (json as any)?.detail ? ` — ${(json as any).detail}` : '';
         throw new Error(msg + detail);
       }
-      const data = Array.isArray((json as any)?.rows) ? (json as any).rows : [];
-      setRows(data);
+      const data: Row[] = Array.isArray((json as any)?.rows) ? (json as any).rows : [];
+
+      if (append) {
+        // Append only the new ones (by symbol)
+        const existingSymbols = new Set(rows.map(r => r.symbol));
+        const newOnes = data.filter(r => !existingSymbols.has(r.symbol));
+        const combined = [...rows, ...newOnes];
+        setRows(combined);
+        // hasMore heuristic: if no growth, or returned < requestedLimit
+        setHasMore(combined.length < requestedLimit && data.length === requestedLimit ? true : combined.length > rows.length && data.length === requestedLimit);
+        if (combined.length === rows.length || data.length < requestedLimit) setHasMore(false);
+      } else {
+        setRows(data);
+        setHasMore(data.length >= requestedLimit); // if fewer than requested, likely end
+      }
+      setServerLimit(requestedLimit);
+      setPage(1);
     } catch (e: any) {
-      setErr(e.message ?? 'Error'); setRows([]);
+      setErr(e.message ?? 'Error');
+      if (!append) setRows([]);
+      setHasMore(false);
     } finally {
       setLoading(false);
     }
@@ -233,20 +247,28 @@ export default function Page() {
   async function run() {
     const ast = buildAstFromFilters({
       exchange, sector, mktMin, mktMax,
-      priceChangePctMin, priceChangeDays,
-      volChangePctMin, volChangeDays
+      priceChangePctMin, priceChangeDays
     });
-    await runWithAst(ast);
+    setServerLimit(50);
+    await runWithAst(ast, 50, false);
   }
 
-  /** --------- Rules CRUD --------- */
+  async function loadMore() {
+    const ast = buildAstFromFilters({
+      exchange, sector, mktMin, mktMax,
+      priceChangePctMin, priceChangeDays
+    });
+    const next = serverLimit + 50;
+    await runWithAst(ast, next, true);
+  }
+
+  /** Rules CRUD */
   async function saveCurrentRule() {
     setSaving(true);
     try {
       const ast = buildAstFromFilters({
         exchange, sector, mktMin, mktMax,
-        priceChangePctMin, priceChangeDays,
-        volChangePctMin, volChangeDays
+        priceChangePctMin, priceChangeDays
       });
       const name = ruleName.trim() || `Rule ${new Date().toLocaleString()}`;
       const res = await fetch('/api/rules', {
@@ -284,14 +306,13 @@ export default function Page() {
   }
 
   async function applyRuleAndRun(rule: SavedRule) {
-    // Sync the visible filters first (nice UX)
+    // Sync filters to show what’s being used
     applyAstToFilters(rule.ast, {
       setExchange, setSector, setMktMin, setMktMax,
-      setPriceChangePctMin, setPriceChangeDays,
-      setVolChangePctMin, setVolChangeDays
+      setPriceChangePctMin, setPriceChangeDays
     });
-    // Then run on backend with the same AST
-    await runWithAst(rule.ast);
+    setServerLimit(50);
+    await runWithAst(rule.ast, 50, false);
   }
 
   function openViewModal(rule: SavedRule) {
@@ -302,25 +323,37 @@ export default function Page() {
 
   useEffect(() => { loadRules(); }, []);
 
-  /** --------- Sorting/Paging --------- */
+  /** Sorting (client-side) */
   const sorted = useMemo(() => {
     const cp = [...rows];
     cp.sort((a, b) => {
-      const av = (a as any)[sortBy];
-      const bv = (b as any)[sortBy];
-      if (typeof av === 'number' && typeof bv === 'number') return sortDir === 'asc' ? av - bv : bv - av;
-      const as = String(av ?? '').toUpperCase();
-      const bs = String(bv ?? '').toUpperCase();
-      return sortDir === 'asc' ? as.localeCompare(bs) : bs.localeCompare(as);
+      let av: any, bv: any;
+      switch (sortKey) {
+        case 'symbol':
+        case 'companyName':
+        case 'sector':
+          av = String((a as any)[sortKey] ?? '').toUpperCase();
+          bv = String((b as any)[sortKey] ?? '').toUpperCase();
+          return sortDir === 'asc' ? av.localeCompare(bv) : bv.localeCompare(av);
+        case 'price':
+        case 'marketCap':
+        case 'priceChangePct':
+          av = (a as any)[sortKey]; bv = (b as any)[sortKey];
+          if (typeof av !== 'number') av = -Infinity;
+          if (typeof bv !== 'number') bv = -Infinity;
+          return sortDir === 'asc' ? av - bv : bv - av;
+      }
     });
     return cp;
-  }, [rows, sortBy, sortDir]);
+  }, [rows, sortKey, sortDir]);
 
   const totalPages = Math.max(1, Math.ceil(sorted.length / pageSize));
   const pageRows = sorted.slice((page - 1) * pageSize, page * pageSize);
 
   const today = new Date().toLocaleDateString('en-US', { timeZone: 'Asia/Seoul', year: 'numeric', month: 'short', day: '2-digit' });
-  const priceColTitle = priceChangeDays ? `Price (${priceChangeDays} days %change)` : 'Price';
+  const priceColTitle = priceChangeDays ? `Price (${priceChangeDays} days % change)` : 'Price';
+
+  const mcOpts = marketCapOptions();
 
   /** ================= UI ================= */
   return (
@@ -332,17 +365,20 @@ export default function Page() {
 
       {/* Filters intro */}
       <div style={{ color: '#334155', marginBottom: 16 }}>
-        Set filters → <b>Run</b>. Click column headers to sort. ({sorted.length} results)
+        Set filters → <b>Run</b>. Click column headers to sort. ({sorted.length} results loaded)
       </div>
 
       {/* Filters grid */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 10 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 10 }}>
+        {/* Exchange */}
         <div>
           <div style={{ fontSize: 12, color: '#64748b' }}>Exchange</div>
           <select value={exchange} onChange={(e) => setExchange(e.target.value)} style={{ width: '100%' }}>
             <option>NASDAQ</option><option>NYSE</option><option>AMEX</option>
           </select>
         </div>
+
+        {/* Sector */}
         <div>
           <div style={{ fontSize: 12, color: '#64748b' }}>Sector</div>
           <select value={sector} onChange={(e) => setSector(e.target.value)} style={{ width: '100%' }}>
@@ -353,44 +389,71 @@ export default function Page() {
             <option>Real Estate</option><option>Communication Services</option>
           </select>
         </div>
+
+        {/* Market Cap Min */}
         <div>
-          <div style={{ fontSize: 12, color: '#64748b' }}>Market Cap Min (USD)</div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <span>$</span>
-            <input value={mktMin} onChange={(e) => setMktMin(e.target.value)} inputMode="numeric" style={{ width: '100%' }} />
-          </div>
+          <div style={{ fontSize: 12, color: '#64748b' }}>Market Cap — Minimum</div>
+          <select value={mktMin} onChange={(e) => setMktMin(e.target.value)} style={{ width: '100%' }}>
+            {mcOpts.map(o => <option key={`min-${o.value || 'any'}`} value={o.value}>{o.label}</option>)}
+          </select>
         </div>
+
+        {/* Market Cap Max */}
         <div>
-          <div style={{ fontSize: 12, color: '#64748b' }}>Market Cap Max (USD)</div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <span>$</span>
-            <input value={mktMax} onChange={(e) => setMktMax(e.target.value)} inputMode="numeric" style={{ width: '100%' }} />
-          </div>
+          <div style={{ fontSize: 12, color: '#64748b' }}>Market Cap — Maximum</div>
+          <select value={mktMax} onChange={(e) => setMktMax(e.target.value)} style={{ width: '100%' }}>
+            {mcOpts.map(o => <option key={`max-${o.value || 'any'}`} value={o.value}>{o.label}</option>)}
+          </select>
         </div>
 
         {/* Price change filter */}
         <div>
-          <div style={{ fontSize: 12, color: '#64748b' }}>Price change ≥ (%)</div>
+          <div style={{ fontSize: 12, color: '#64748b' }}>Price Change ≥ (%)</div>
           <input value={priceChangePctMin} onChange={(e) => setPriceChangePctMin(e.target.value)} inputMode="decimal" style={{ width: '100%' }} />
         </div>
         <div>
-          <div style={{ fontSize: 12, color: '#64748b' }}>over last (days)</div>
+          <div style={{ fontSize: 12, color: '#64748b' }}>Over Last (days)</div>
           <input value={priceChangeDays} onChange={(e) => setPriceChangeDays(e.target.value)} inputMode="numeric" style={{ width: '100%' }} />
         </div>
 
-        {/* Volume change filter */}
+        {/* Sorting Field */}
         <div>
-          <div style={{ fontSize: 12, color: '#64748b' }}>Volume change ≥ (%)</div>
-          <input value={volChangePctMin} onChange={(e) => setVolChangePctMin(e.target.value)} inputMode="decimal" style={{ width: '100%' }} />
-        </div>
-        <div>
-          <div style={{ fontSize: 12, color: '#64748b' }}>over last (days)</div>
-          <input value={volChangeDays} onChange={(e) => setVolChangeDays(e.target.value)} inputMode="numeric" style={{ width: '100%' }} />
+          <div style={{ fontSize: 12, color: '#64748b' }}>Sort By</div>
+          <select
+            value={sortKey}
+            onChange={(e) => setSortKey(e.target.value as SortKey)}
+            style={{ width: '100%' }}
+          >
+            <option value="marketCap">Market Cap</option>
+            <option value="price">Price</option>
+            <option value="priceChangePct">Price Change (%)</option>
+            <option value="symbol">Symbol</option>
+            <option value="companyName">Company Name</option>
+            <option value="sector">Sector</option>
+          </select>
         </div>
 
+        {/* Sorting Direction */}
         <div>
-          <div style={{ fontSize: 12, color: '#64748b' }}>Limit (server)</div>
-          <input value={limit} onChange={(e) => setLimit(e.target.value)} inputMode="numeric" style={{ width: '100%' }} />
+          <div style={{ fontSize: 12, color: '#64748b' }}>Sort Direction</div>
+          <select
+            value={sortDir}
+            onChange={(e) => setSortDir(e.target.value as 'asc' | 'desc')}
+            style={{ width: '100%' }}
+          >
+            {/* Wording tuned per numeric/text semantics */}
+            {sortKey === 'marketCap' || sortKey === 'price' || sortKey === 'priceChangePct' ? (
+              <>
+                <option value="asc">Low → High</option>
+                <option value="desc">High → Low</option>
+              </>
+            ) : (
+              <>
+                <option value="asc">A → Z</option>
+                <option value="desc">Z → A</option>
+              </>
+            )}
+          </select>
         </div>
       </div>
 
@@ -401,13 +464,15 @@ export default function Page() {
         </button>
         <button
           onClick={() => {
-            setSector(''); setMktMin(''); setMktMax('');
-            setPriceChangePctMin(''); setPriceChangeDays('');
-            setVolChangePctMin(''); setVolChangeDays('');
+            setSector('');
+            setMktMin('');
+            setMktMax('');
+            setPriceChangePctMin('');
+            setPriceChangeDays('');
           }}
           style={{ padding: '8px 14px' }}
         >
-          Reset filters
+          Reset Filters
         </button>
       </div>
 
@@ -418,7 +483,7 @@ export default function Page() {
           <input
             value={ruleName}
             onChange={(e) => setRuleName(e.target.value)}
-            placeholder="Rule name (e.g., Big caps up ≥5% / 20d)"
+            placeholder="Rule name (e.g., Large Caps up ≥5% / 20d)"
             style={{ flex: '1 1 320px', padding: 8, border: '1px solid #cbd5e1', borderRadius: 8 }}
           />
           <button onClick={saveCurrentRule} disabled={saving} style={{ padding: '8px 14px' }}>
@@ -449,7 +514,6 @@ export default function Page() {
               {rules.map((r) => (
                 <tr key={r.id} style={{ borderBottom: '1px solid #f1f5f9' }}>
                   <td style={{ padding: 8 }}>
-                    {/* Name as hyperlink → apply + run */}
                     <a
                       href="#"
                       onClick={(e) => { e.preventDefault(); applyRuleAndRun(r); }}
@@ -493,28 +557,28 @@ export default function Page() {
             <tr style={{ textAlign: 'left', borderBottom: '1px solid #e5e7eb' }}>
               {[
                 { key: 'symbol', label: 'Symbol' },
-                { key: 'companyName', label: 'Name' },
+                { key: 'companyName', label: 'Company' },
                 { key: 'price', label: priceColTitle, right: true },
                 { key: 'marketCap', label: 'Market Cap', right: true },
-                { key: 'sector', label: 'Sector' },
-                { key: 'volume', label: 'Volume', right: true }
+                { key: 'sector', label: 'Sector' }
               ].map((c: any) => (
                 <th
                   key={c.key}
+                  style={{ padding: 10, cursor: 'pointer', textAlign: c.right ? 'right' : 'left' }}
+                  title="Click to sort"
                   onClick={() => {
                     const k = c.key as SortKey;
-                    if (sortBy === k) setSortDir(sortDir === 'asc' ? 'desc' : 'asc');
+                    if (sortKey === k) setSortDir(sortDir === 'asc' ? 'desc' : 'asc');
                     else {
-                      setSortBy(k);
+                      setSortKey(k);
                       setSortDir(k === 'symbol' || k === 'companyName' || k === 'sector' ? 'asc' : 'desc');
                     }
                   }}
-                  style={{ padding: 10, cursor: 'pointer', textAlign: c.right ? 'right' : 'left' }}
-                  title="Click to sort"
                 >
-                  {c.label} {sortBy === c.key ? (sortDir === 'asc' ? '▲' : '▼') : ''}
+                  {c.label} {sortKey === c.key ? (sortDir === 'asc' ? '▲' : '▼') : ''}
                 </th>
               ))}
+              <th style={{ padding: 10, textAlign: 'right' }}>Volume</th>
               <th style={{ padding: 10 }}>Explain</th>
             </tr>
           </thead>
@@ -557,11 +621,15 @@ export default function Page() {
         </table>
       </div>
 
-      {/* Pagination */}
-      <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 12 }}>
+      {/* Client pagination + server "More" */}
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 12, flexWrap: 'wrap' }}>
         <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page <= 1}>Prev</button>
-        <div style={{ fontSize: 12, color: '#64748b' }}>Page {page} / {totalPages}</div>
-        <button onClick={() => setPage(p => Math.min(totalPages, p + 1))} disabled={page >= totalPages}>Next</button>
+        <div style={{ fontSize: 12, color: '#64748b' }}>Page {page} / {Math.max(1, Math.ceil(sorted.length / pageSize))}</div>
+        <button onClick={() => setPage(p => p + 1)} disabled={page >= Math.ceil(sorted.length / pageSize)}>Next</button>
+        <span style={{ flex: '1 0 12px' }} />
+        <button onClick={loadMore} disabled={loading || !hasMore} style={{ padding: '8px 14px' }}>
+          {hasMore ? (loading ? 'Loading…' : 'More (next 50)') : 'No more'}
+        </button>
       </div>
 
       {/* View Rule Modal */}
