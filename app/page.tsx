@@ -1,8 +1,16 @@
 'use client';
 import { useEffect, useMemo, useState } from 'react';
-import type { RuleAST, SavedRule } from '@/lib/types';
+import type { RuleAST } from '@/lib/types';
 
-/** ----------------- Row Type ----------------- */
+/** ----------------- Local Types ----------------- */
+type SavedRule = {
+  id: string;
+  name: string;
+  ast: RuleAST;
+  createdAt: string;
+  updatedAt: string;
+};
+
 type Row = {
   symbol: string;
   companyName?: string;
@@ -15,7 +23,7 @@ type Row = {
 
 type SortKey = 'symbol' | 'companyName' | 'price' | 'marketCap' | 'sector' | 'volume' | 'priceChangePct';
 
-/** ----------------- Helpers ----------------- */
+/** ----------------- Format Helpers ----------------- */
 function formatInt(n?: number) {
   if (typeof n !== 'number' || !isFinite(n)) return '—';
   return n.toLocaleString('en-US');
@@ -30,7 +38,7 @@ function formatPct(n?: number) {
   return `${sign}${n.toFixed(2)}%`;
 }
 
-/** Build a Rule AST from current filters (UI → AST) */
+/** ----------------- Build AST (UI → AST) ----------------- */
 function buildAstFromFilters(opts: {
   exchange: string;
   sector: string;
@@ -78,7 +86,7 @@ function buildAstFromFilters(opts: {
   return children.length === 1 ? children[0] : { type: 'AND', children };
 }
 
-/** Merge AST back into filter state */
+/** ----------------- Apply AST (AST → UI) ----------------- */
 function applyAstToFilters(ast: RuleAST, set: {
   setExchange: (v: string) => void;
   setSector: (v: string) => void;
@@ -92,7 +100,7 @@ function applyAstToFilters(ast: RuleAST, set: {
   function walk(node: RuleAST) {
     if (!node) return;
     if (node.type === 'condition') {
-      const { id, params = {} } = node;
+      const { id, params = {} } = node as any;
       switch (id) {
         case 'base.exchange':
           if (typeof params.value === 'string') set.setExchange(params.value);
@@ -124,7 +132,7 @@ function applyAstToFilters(ast: RuleAST, set: {
   walk(ast);
 }
 
-/** Summarize AST for friendly “View” */
+/** ----------------- Summarize AST for “View” ----------------- */
 function summarizeAst(ast: RuleAST) {
   const out: Record<string, string> = {};
   function put(key: string, val: any) {
@@ -133,7 +141,7 @@ function summarizeAst(ast: RuleAST) {
   function walk(node: RuleAST) {
     if (!node) return;
     if (node.type === 'condition') {
-      const { id, params = {} } = node;
+      const { id, params = {} } = node as any;
       if (id === 'base.exchange') put('Exchange', params.value);
       else if (id === 'base.sector') put('Sector', params.value);
       else if (id === 'base.marketCapMin') put('Market Cap Min (USD)', params.value);
@@ -155,7 +163,7 @@ function summarizeAst(ast: RuleAST) {
   return out;
 }
 
-/** ----------------- Page Component ----------------- */
+/** ================= Page Component ================= */
 export default function Page() {
   // Filters
   const [exchange, setExchange] = useState('NASDAQ');
@@ -170,23 +178,25 @@ export default function Page() {
   const [limit, setLimit] = useState('25');
   const [rows, setRows] = useState<Row[]>([]);
   const [loading, setLoading] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
+  const [err,   setErr] = useState<string | null>(null);
 
   const [sortBy, setSortBy] = useState<SortKey>('marketCap');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
   const [page, setPage] = useState(1);
+  const pageSize = 25;
 
+  // Rules
   const [ruleName, setRuleName] = useState('');
   const [saving, setSaving] = useState(false);
   const [rules, setRules] = useState<SavedRule[]>([]);
   const [loadingRules, setLoadingRules] = useState(false);
   const [rulesError, setRulesError] = useState<string | null>(null);
 
+  // View modal
   const [viewOpen, setViewOpen] = useState(false);
   const [viewData, setViewData] = useState<{ name: string; fields: Record<string, string> } | null>(null);
 
-  const pageSize = 25;
-
+  /** ----------------- Backend Runner ----------------- */
   async function runWithAst(ast: RuleAST) {
     setLoading(true); setErr(null); setPage(1);
     try {
@@ -215,6 +225,7 @@ export default function Page() {
     await runWithAst(ast);
   }
 
+  /** ----------------- Rules CRUD ----------------- */
   async function saveCurrentRule() {
     setSaving(true);
     try {
@@ -240,13 +251,13 @@ export default function Page() {
   }
 
   async function loadRules() {
-    setLoadingRules(true);
+    setLoadingRules(true); setRulesError(null);
     try {
       const res = await fetch('/api/rules');
       const json = await res.json();
-      setRules(json.rules || []);
+      setRules(Array.isArray(json.rules) ? json.rules : []);
     } catch (e: any) {
-      setRulesError(e.message);
+      setRulesError(e.message ?? 'Failed to load rules');
     } finally {
       setLoadingRules(false);
     }
@@ -259,11 +270,13 @@ export default function Page() {
   }
 
   async function applyRuleAndRun(rule: SavedRule) {
+    // visually sync filters
     applyAstToFilters(rule.ast, {
       setExchange, setSector, setMktMin, setMktMax,
       setPriceChangePctMin, setPriceChangeDays,
       setVolChangePctMin, setVolChangeDays
     });
+    // run via backend
     await runWithAst(rule.ast);
   }
 
@@ -275,6 +288,7 @@ export default function Page() {
 
   useEffect(() => { loadRules(); }, []);
 
+  /** ----------------- Sorting/Paging ----------------- */
   const sorted = useMemo(() => {
     const cp = [...rows];
     cp.sort((a, b) => {
@@ -294,66 +308,267 @@ export default function Page() {
   const today = new Date().toLocaleDateString('en-US', { timeZone: 'Asia/Seoul', year: 'numeric', month: 'short', day: '2-digit' });
   const priceColTitle = priceChangeDays ? `Price (${priceChangeDays} days %change)` : 'Price';
 
+  /** ----------------- UI ----------------- */
   return (
     <main style={{ maxWidth: 1150, margin: '40px auto', padding: 16 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-        <h1>Stock Screener</h1>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+        <h1 style={{ fontSize: 28, fontWeight: 700 }}>Stock Screener</h1>
         <div style={{ color: '#64748b' }}>{today}</div>
       </div>
 
-      {/* Save Rule Panel */}
-      <div style={{ marginTop: 16 }}>
-        <input value={ruleName} onChange={e=>setRuleName(e.target.value)} placeholder="Rule name" />
-        <button onClick={saveCurrentRule} disabled={saving}>Save Rule</button>
+      {/* Filters */}
+      <div style={{ color: '#334155', marginBottom: 16 }}>
+        Set filters → <b>Run</b>. Click column headers to sort. ({sorted.length} results)
       </div>
 
-      {/* Rules List */}
-      <table style={{ marginTop: 16, width: '100%' }}>
-        <thead><tr><th>Name</th><th>Updated</th><th>Actions</th></tr></thead>
-        <tbody>
-          {rules.map(r=>(
-            <tr key={r.id}>
-              <td>
-                <a href="#" onClick={e=>{e.preventDefault(); applyRuleAndRun(r);}}>{r.name}</a>
-              </td>
-              <td>{new Date(r.updatedAt).toLocaleString()}</td>
-              <td>
-                <button onClick={()=>openViewModal(r)}>View</button>
-                <button onClick={()=>deleteRule(r.id)}>Delete</button>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 10 }}>
+        <div>
+          <div style={{ fontSize: 12, color: '#64748b' }}>Exchange</div>
+          <select value={exchange} onChange={(e) => setExchange(e.target.value)} style={{ width: '100%' }}>
+            <option>NASDAQ</option><option>NYSE</option><option>AMEX</option>
+          </select>
+        </div>
+        <div>
+          <div style={{ fontSize: 12, color: '#64748b' }}>Sector</div>
+          <select value={sector} onChange={(e) => setSector(e.target.value)} style={{ width: '100%' }}>
+            <option value="">Any</option>
+            <option>Technology</option><option>Financial Services</option><option>Healthcare</option>
+            <option>Consumer Cyclical</option><option>Consumer Defensive</option><option>Industrials</option>
+            <option>Energy</option><option>Basic Materials</option><option>Utilities</option>
+            <option>Real Estate</option><option>Communication Services</option>
+          </select>
+        </div>
+        <div>
+          <div style={{ fontSize: 12, color: '#64748b' }}>Market Cap Min (USD)</div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span>$</span>
+            <input value={mktMin} onChange={(e) => setMktMin(e.target.value)} inputMode="numeric" style={{ width: '100%' }} />
+          </div>
+        </div>
+        <div>
+          <div style={{ fontSize: 12, color: '#64748b' }}>Market Cap Max (USD)</div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span>$</span>
+            <input value={mktMax} onChange={(e) => setMktMax(e.target.value)} inputMode="numeric" style={{ width: '100%' }} />
+          </div>
+        </div>
 
-      {/* Results Table */}
-      <table style={{ marginTop: 16, width: '100%' }}>
-        <thead><tr><th>Symbol</th><th>Name</th><th>{priceColTitle}</th><th>Market Cap</th><th>Sector</th><th>Volume</th></tr></thead>
-        <tbody>
-          {pageRows.map(r=>(
-            <tr key={r.symbol}>
-              <td>{r.symbol}</td>
-              <td>{r.companyName}</td>
-              <td style={{ color: r.priceChangePct!>0?'red':r.priceChangePct!<0?'blue':undefined }}>
-                {priceChangeDays ? `${formatUsd(r.price)} (${formatPct(r.priceChangePct)})` : formatUsd(r.price)}
-              </td>
-              <td>{formatInt(r.marketCap)}</td>
-              <td>{r.sector}</td>
-              <td>{formatInt(r.volume)}</td>
+        {/* Price change filter */}
+        <div>
+          <div style={{ fontSize: 12, color: '#64748b' }}>Price change ≥ (%)</div>
+          <input value={priceChangePctMin} onChange={(e) => setPriceChangePctMin(e.target.value)} inputMode="decimal" style={{ width: '100%' }} />
+        </div>
+        <div>
+          <div style={{ fontSize: 12, color: '#64748b' }}>over last (days)</div>
+          <input value={priceChangeDays} onChange={(e) => setPriceChangeDays(e.target.value)} inputMode="numeric" style={{ width: '100%' }} />
+        </div>
+
+        {/* Volume change filter */}
+        <div>
+          <div style={{ fontSize: 12, color: '#64748b' }}>Volume change ≥ (%)</div>
+          <input value={volChangePctMin} onChange={(e) => setVolChangePctMin(e.target.value)} inputMode="decimal" style={{ width: '100%' }} />
+        </div>
+        <div>
+          <div style={{ fontSize: 12, color: '#64748b' }}>over last (days)</div>
+          <input value={volChangeDays} onChange={(e) => setVolChangeDays(e.target.value)} inputMode="numeric" style={{ width: '100%' }} />
+        </div>
+
+        <div>
+          <div style={{ fontSize: 12, color: '#64748b' }}>Limit (server)</div>
+          <input value={limit} onChange={(e) => setLimit(e.target.value)} inputMode="numeric" style={{ width: '100%' }} />
+        </div>
+      </div>
+
+      {/* Actions */}
+      <div style={{ marginTop: 12, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        <button onClick={run} disabled={loading} style={{ padding: '8px 14px' }}>
+          {loading ? 'Loading…' : 'Run'}
+        </button>
+        <button
+          onClick={() => {
+            setSector(''); setMktMin(''); setMktMax('');
+            setPriceChangePctMin(''); setPriceChangeDays('');
+            setVolChangePctMin(''); setVolChangeDays('');
+          }}
+          style={{ padding: '8px 14px' }}
+        >
+          Reset filters
+        </button>
+      </div>
+
+      {/* Save Rule panel */}
+      <div style={{ marginTop: 16, padding: 12, border: '1px solid #e2e8f0', borderRadius: 12 }}>
+        <div style={{ fontWeight: 600, marginBottom: 8 }}>Save current filters as a Rule</div>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+          <input
+            value={ruleName}
+            onChange={(e) => setRuleName(e.target.value)}
+            placeholder="Rule name (e.g., Big caps up ≥5% / 20d)"
+            style={{ flex: '1 1 320px', padding: 8, border: '1px solid #cbd5e1', borderRadius: 8 }}
+          />
+          <button onClick={saveCurrentRule} disabled={saving} style={{ padding: '8px 14px' }}>
+            {saving ? 'Saving…' : 'Save Rule'}
+          </button>
+        </div>
+      </div>
+
+      {/* My Rules list */}
+      <div style={{ marginTop: 16, padding: 12, border: '1px solid #e2e8f0', borderRadius: 12 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+          <div style={{ fontWeight: 600 }}>My Rules</div>
+          <button onClick={loadRules} disabled={loadingRules} style={{ padding: '6px 10px' }}>
+            {loadingRules ? 'Refreshing…' : 'Refresh'}
+          </button>
+        </div>
+        {rulesError && <div style={{ color: '#b91c1c', marginTop: 8 }}>Error: {rulesError}</div>}
+        <div style={{ marginTop: 8, overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead>
+              <tr style={{ textAlign: 'left', borderBottom: '1px solid #e5e7eb' }}>
+                <th style={{ padding: 8 }}>Name</th>
+                <th style={{ padding: 8 }}>Updated</th>
+                <th style={{ padding: 8 }}>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rules.map((r) => (
+                <tr key={r.id} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                  <td style={{ padding: 8 }}>
+                    <a
+                      href="#"
+                      onClick={(e) => { e.preventDefault(); applyRuleAndRun(r); }}
+                      style={{ color: '#2563eb', textDecoration: 'none' }}
+                      onMouseEnter={(e) => (e.currentTarget.style.textDecoration = 'underline')}
+                      onMouseLeave={(e) => (e.currentTarget.style.textDecoration = 'none')}
+                      title="Click to apply this rule and run"
+                    >
+                      {r.name}
+                    </a>
+                  </td>
+                  <td style={{ padding: 8, color: '#64748b' }}>{new Date(r.updatedAt).toLocaleString()}</td>
+                  <td style={{ padding: 8, display: 'flex', gap: 8 }}>
+                    <button onClick={() => openViewModal(r)} title="View rule details" style={{ padding: '6px 10px' }}>
+                      View
+                    </button>
+                    <button onClick={() => deleteRule(r.id)} title="Delete rule" style={{ padding: '6px 10px' }}>
+                      Delete
+                    </button>
+                  </td>
+                </tr>
+              ))}
+              {rules.length === 0 && !loadingRules && (
+                <tr><td colSpan={3} style={{ padding: 8, color: '#64748b' }}>No saved rules yet.</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {err && (
+        <div style={{ marginTop: 10, color: '#b91c1c', background: '#fee2e2', padding: 8, borderRadius: 8 }}>
+          Error: {err}
+        </div>
+      )}
+
+      {/* Results table */}
+      <div style={{ marginTop: 16, overflowX: 'auto', border: '1px solid '#e2e8f0', borderRadius: 12 }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <thead style={{ position: 'sticky', top: 0, background: '#f8fafc', zIndex: 1 }}>
+            <tr style={{ textAlign: 'left', borderBottom: '1px solid #e5e7eb' }}>
+              {[
+                { key: 'symbol', label: 'Symbol' },
+                { key: 'companyName', label: 'Name' },
+                { key: 'price', label: priceColTitle, right: true },
+                { key: 'marketCap', label: 'Market Cap', right: true },
+                { key: 'sector', label: 'Sector' },
+                { key: 'volume', label: 'Volume', right: true }
+              ].map((c: any) => (
+                <th
+                  key={c.key}
+                  onClick={() => {
+                    if (c.key as SortKey) {
+                      const k = c.key as SortKey;
+                      if (sortBy === k) setSortDir(sortDir === 'asc' ? 'desc' : 'asc');
+                      else {
+                        setSortBy(k);
+                        setSortDir(k === 'symbol' || k === 'companyName' || k === 'sector' ? 'asc' : 'desc');
+                      }
+                    }
+                  }}
+                  style={{ padding: 10, cursor: 'pointer', textAlign: c.right ? 'right' : 'left' }}
+                  title="Click to sort"
+                >
+                  {c.label} {sortBy === c.key ? (sortDir === 'asc' ? '▲' : '▼') : ''}
+                </th>
+              ))}
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {pageRows.map((r) => {
+              const pct = r.priceChangePct;
+              const color = typeof pct === 'number' ? (pct > 0 ? '#ef4444' : pct < 0 ? '#2563eb' : undefined) : undefined;
+              const priceCell = priceChangeDays ? `${formatUsd(r.price)} (${formatPct(pct)})` : formatUsd(r.price);
+              return (
+                <tr key={r.symbol} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                  <td style={{ padding: 10 }}>{r.symbol}</td>
+                  <td style={{ padding: 10 }}>{r.companyName ?? '—'}</td>
+                  <td style={{ padding: 10, textAlign: 'right', color }}>{priceCell}</td>
+                  <td style={{ padding: 10, textAlign: 'right' }}>${formatInt(r.marketCap)}</td>
+                  <td style={{ padding: 10 }}>{r.sector ?? '—'}</td>
+                  <td style={{ padding: 10, textAlign: 'right' }}>{formatInt(r.volume)}</td>
+                </tr>
+              );
+            })}
+            {!loading && pageRows.length === 0 && !err && (
+              <tr>
+                <td colSpan={6} style={{ padding: 16, color: '#6b7280' }}>
+                  No results. Adjust filters and press <b>Run</b>.
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Pagination */}
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 12 }}>
+        <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page <= 1}>Prev</button>
+        <div style={{ fontSize: 12, color: '#64748b' }}>Page {page} / {totalPages}</div>
+        <button onClick={() => setPage(p => Math.min(totalPages, p + 1))} disabled={page >= totalPages}>Next</button>
+      </div>
 
       {/* View Modal */}
       {viewOpen && viewData && (
-        <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.4)' }} onClick={()=>setViewOpen(false)}>
-          <div style={{ background:'white', margin:'auto', padding:20, width:400 }} onClick={e=>e.stopPropagation()}>
-            <h3>{viewData.name}</h3>
-            <ul>
-              {Object.entries(viewData.fields).map(([k,v])=><li key={k}>{k}: {v}</li>)}
-            </ul>
-            <button onClick={()=>setViewOpen(false)}>Close</button>
+        <div
+          role="dialog"
+          aria-modal="true"
+          style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
+          onClick={() => setViewOpen(false)}
+        >
+          <div
+            style={{ background: 'white', borderRadius: 12, width: '100%', maxWidth: 520, boxShadow: '0 10px 30px rgba(0,0,0,0.2)' }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ padding: 16, borderBottom: '1px solid #e5e7eb', display: 'flex', justifyContent: 'space-between' }}>
+              <div style={{ fontWeight: 700 }}>{viewData.name}</div>
+              <button onClick={() => setViewOpen(false)} style={{ padding: '6px 10px' }}>Close</button>
+            </div>
+            <div style={{ padding: 16 }}>
+              <dl style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                {Object.entries(viewData.fields).map(([k, v]) => (
+                  <div key={k} style={{ display: 'contents' }}>
+                    <dt style={{ color: '#64748b' }}>{k}</dt>
+                    <dd style={{ textAlign: 'right' }}>{v}</dd>
+                  </div>
+                ))}
+              </dl>
+              {Object.keys(viewData.fields).length === 0 && (
+                <div style={{ color: '#64748b' }}>No parameters set for this rule.</div>
+              )}
+            </div>
+            <div style={{ padding: 16, borderTop: '1px solid #e5e7eb', display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+              <button onClick={() => setViewOpen(false)} style={{ padding: '8px 14px' }}>OK</button>
+            </div>
           </div>
         </div>
       )}
