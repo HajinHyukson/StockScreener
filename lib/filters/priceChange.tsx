@@ -1,0 +1,48 @@
+'use client';
+import { FilterModule } from '@/lib/filterTypes';
+
+export const priceChangeFilter: FilterModule = {
+  id: 'pv.priceChangePctN',
+  label: 'Price Change',
+  group: 'always',
+
+  Component: ({ value, onChange }) => (
+    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+      <div>
+        <div style={{ fontSize: 12, color: '#64748b' }}>Price Change ≥ (%)</div>
+        <input
+          value={value?.pct ?? ''}
+          onChange={(e) => onChange({ ...value, pct: e.target.value })}
+          inputMode="decimal"
+          style={{ width: '100%' }}
+        />
+      </div>
+      <div>
+        <div style={{ fontSize: 12, color: '#64748b' }}>Over Last (days)</div>
+        <input
+          value={value?.days ?? ''}
+          onChange={(e) => onChange({ ...value, days: e.target.value })}
+          inputMode="numeric"
+          style={{ width: '100%' }}
+        />
+      </div>
+    </div>
+  ),
+
+  toAST: (v) => {
+    const pct = Number(v?.pct);
+    const days = Number(v?.days);
+    if (Number.isFinite(pct) && Number.isFinite(days) && days > 0) {
+      return [{ type: 'condition', id: 'pv.priceChangePctN', params: { pct, days } }];
+    }
+    return [];
+  },
+  fromAST: (ast) =>
+    ast.type === 'condition' && ast.id === 'pv.priceChangePctN'
+      ? { pct: String(ast.params?.pct ?? ''), days: String(ast.params?.days ?? '') }
+      : undefined,
+  summarize: (v) =>
+    Number.isFinite(Number(v?.pct)) && Number.isFinite(Number(v?.days))
+      ? { 'Price change ≥ (%)': v.pct, 'Over last (days)': v.days }
+      : {}
+};
