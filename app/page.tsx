@@ -209,26 +209,36 @@ export default function Page() {
   async function run() {
     setLoading(true); setErr(null); setPage(1);
     try {
-      const qs = new URLSearchParams({
-        exchange, limit,
-        ...(sector ? { sector } : {}),
-        ...(mktMin ? { marketCapMoreThan: mktMin } : {}),
-        ...(mktMax ? { marketCapLowerThan: mktMax } : {}),
-        ...(priceChangePctMin ? { priceChangePctMin } : {}),
-        ...(priceChangeDays ? { priceChangeDays } : {}),
-        ...(volChangePctMin ? { volChangePctMin } : {}),
-        ...(volChangeDays ? { volChangeDays } : {})
+      const ast = buildAstFromFilters({
+        exchange, sector, mktMin, mktMax,
+        priceChangePctMin, priceChangeDays,
+        volChangePctMin, volChangeDays
       });
-      const res = await fetch(`/api/screener?${qs.toString()}`);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = (await res.json()) as Row[];
-      setRows(Array.isArray(data) ? data : []);
+      await runWithAst(ast);
     } catch (e: any) {
       setErr(e.message ?? 'Error'); setRows([]);
     } finally {
       setLoading(false);
     }
+
+async function runWithAst(ast: RuleAST) {
+  setLoading(true); setErr(null); setPage(1);
+  try {
+    const res = await fetch('/api/run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ast, limit: Number(limit) || 25 })
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const json = await res.json();
+    const data = Array.isArray(json?.rows) ? json.rows : [];
+    setRows(data);
+  } catch (e: any) {
+    setErr(e.message ?? 'Error'); setRows([]);
+  } finally {
+    setLoading(false);
   }
+}
 
   function toggleSort(key: SortKey) {
     if (sortBy === key) setSortDir(sortDir === 'asc' ? 'desc' : 'asc');
@@ -476,7 +486,16 @@ export default function Page() {
                     {/* Name as hyperlink → apply + run */}
                     <a
                       href="#"
-                      onClick={(e) => { e.preventDefault(); applyRuleAndRun(r); }}
+                      onClick={(e) => {
+                        e.preventDefault();
+                        // keep UI in sync: apply filters for visibility
+                        applyAstToFilters(r.ast, {
+                          setExchange, setSector, setMktMin, setMktMax,
+                          setPriceChangePctMin, setPriceChangeDays,
+                          setVolChangePctMin, setVolChangeDays
+                        });
+                        runWithAst(r.ast);
+                      }}
                       style={{ color: '#2563eb', textDecoration: 'none' }}
                       onMouseEnter={(e) => (e.currentTarget.style.textDecoration = 'underline')}
                       onMouseLeave={(e) => (e.currentTarget.style.textDecoration = 'none')}
