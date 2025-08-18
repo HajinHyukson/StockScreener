@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { RuleAST } from '@/lib/types';
 
-/** ----------------- Local Types ----------------- */
+/** Local types (to avoid import mismatches) */
 type SavedRule = {
   id: string;
   name: string;
@@ -23,7 +23,7 @@ type Row = {
 
 type SortKey = 'symbol' | 'companyName' | 'price' | 'marketCap' | 'sector' | 'volume' | 'priceChangePct';
 
-/** ----------------- Format Helpers ----------------- */
+/** ---------- Format helpers ---------- */
 function formatInt(n?: number) {
   if (typeof n !== 'number' || !isFinite(n)) return '—';
   return n.toLocaleString('en-US');
@@ -38,7 +38,7 @@ function formatPct(n?: number) {
   return `${sign}${n.toFixed(2)}%`;
 }
 
-/** ----------------- Build AST (UI → AST) ----------------- */
+/** ---------- Build AST (UI → AST) ---------- */
 function buildAstFromFilters(opts: {
   exchange: string;
   sector: string;
@@ -86,7 +86,7 @@ function buildAstFromFilters(opts: {
   return children.length === 1 ? children[0] : { type: 'AND', children };
 }
 
-/** ----------------- Apply AST (AST → UI) ----------------- */
+/** ---------- Apply AST (AST → UI) ---------- */
 function applyAstToFilters(ast: RuleAST, set: {
   setExchange: (v: string) => void;
   setSector: (v: string) => void;
@@ -100,7 +100,7 @@ function applyAstToFilters(ast: RuleAST, set: {
   function walk(node: RuleAST) {
     if (!node) return;
     if (node.type === 'condition') {
-      const { id, params = {} } = node as any;
+      const { id, params = {} as any } = node as any;
       switch (id) {
         case 'base.exchange':
           if (typeof params.value === 'string') set.setExchange(params.value);
@@ -132,7 +132,7 @@ function applyAstToFilters(ast: RuleAST, set: {
   walk(ast);
 }
 
-/** ----------------- Summarize AST for “View” ----------------- */
+/** ---------- Summarize AST for View ---------- */
 function summarizeAst(ast: RuleAST) {
   const out: Record<string, string> = {};
   function put(key: string, val: any) {
@@ -141,7 +141,7 @@ function summarizeAst(ast: RuleAST) {
   function walk(node: RuleAST) {
     if (!node) return;
     if (node.type === 'condition') {
-      const { id, params = {} } = node as any;
+      const { id, params = {} as any } = node as any;
       if (id === 'base.exchange') put('Exchange', params.value);
       else if (id === 'base.sector') put('Sector', params.value);
       else if (id === 'base.marketCapMin') put('Market Cap Min (USD)', params.value);
@@ -163,7 +163,7 @@ function summarizeAst(ast: RuleAST) {
   return out;
 }
 
-/** ================= Page Component ================= */
+/** =================== Page Component =================== */
 export default function Page() {
   // Filters
   const [exchange, setExchange] = useState('NASDAQ');
@@ -175,11 +175,13 @@ export default function Page() {
   const [volChangePctMin, setVolChangePctMin] = useState('');
   const [volChangeDays, setVolChangeDays] = useState('');
 
+  // Data
   const [limit, setLimit] = useState('25');
   const [rows, setRows] = useState<Row[]>([]);
   const [loading, setLoading] = useState(false);
-  const [err,   setErr] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
 
+  // Sorting/paging
   const [sortBy, setSortBy] = useState<SortKey>('marketCap');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
   const [page, setPage] = useState(1);
@@ -196,7 +198,7 @@ export default function Page() {
   const [viewOpen, setViewOpen] = useState(false);
   const [viewData, setViewData] = useState<{ name: string; fields: Record<string, string> } | null>(null);
 
-  /** ----------------- Backend Runner ----------------- */
+  /** --------- Backend runner (/api/run) --------- */
   async function runWithAst(ast: RuleAST) {
     setLoading(true); setErr(null); setPage(1);
     try {
@@ -225,7 +227,7 @@ export default function Page() {
     await runWithAst(ast);
   }
 
-  /** ----------------- Rules CRUD ----------------- */
+  /** --------- Rules CRUD --------- */
   async function saveCurrentRule() {
     setSaving(true);
     try {
@@ -270,13 +272,13 @@ export default function Page() {
   }
 
   async function applyRuleAndRun(rule: SavedRule) {
-    // visually sync filters
+    // sync UI
     applyAstToFilters(rule.ast, {
       setExchange, setSector, setMktMin, setMktMax,
       setPriceChangePctMin, setPriceChangeDays,
       setVolChangePctMin, setVolChangeDays
     });
-    // run via backend
+    // run
     await runWithAst(rule.ast);
   }
 
@@ -288,7 +290,7 @@ export default function Page() {
 
   useEffect(() => { loadRules(); }, []);
 
-  /** ----------------- Sorting/Paging ----------------- */
+  /** --------- Sorting/Paging --------- */
   const sorted = useMemo(() => {
     const cp = [...rows];
     cp.sort((a, b) => {
@@ -471,7 +473,7 @@ export default function Page() {
       )}
 
       {/* Results table */}
-      <div style={{ marginTop: 16, overflowX: 'auto', border: '1px solid '#e2e8f0', borderRadius: 12 }}>
+      <div style={{ marginTop: 16, overflowX: 'auto', border: '1px solid #e2e8f0', borderRadius: 12 }}>
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
           <thead style={{ position: 'sticky', top: 0, background: '#f8fafc', zIndex: 1 }}>
             <tr style={{ textAlign: 'left', borderBottom: '1px solid #e5e7eb' }}>
@@ -486,13 +488,11 @@ export default function Page() {
                 <th
                   key={c.key}
                   onClick={() => {
-                    if (c.key as SortKey) {
-                      const k = c.key as SortKey;
-                      if (sortBy === k) setSortDir(sortDir === 'asc' ? 'desc' : 'asc');
-                      else {
-                        setSortBy(k);
-                        setSortDir(k === 'symbol' || k === 'companyName' || k === 'sector' ? 'asc' : 'desc');
-                      }
+                    const k = c.key as SortKey;
+                    if (sortBy === k) setSortDir(sortDir === 'asc' ? 'desc' : 'asc');
+                    else {
+                      setSortBy(k);
+                      setSortDir(k === 'symbol' || k === 'companyName' || k === 'sector' ? 'asc' : 'desc');
                     }
                   }}
                   style={{ padding: 10, cursor: 'pointer', textAlign: c.right ? 'right' : 'left' }}
