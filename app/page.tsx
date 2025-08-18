@@ -181,6 +181,8 @@ export default function Page() {
   const [rules, setRules] = useState<SavedRule[]>([]);
   const [loadingRules, setLoadingRules] = useState(false);
   const [rulesError, setRulesError] = useState<string | null>(null);
+  // Track per-rule auto-run preference
+  const [autoRunPrefs, setAutoRunPrefs] = useState<Record<string, boolean>>({});
   const [autoRunAfterApply, setAutoRunAfterApply] = useState(false);
 
   async function run() {
@@ -314,7 +316,7 @@ export default function Page() {
       setVolChangeDays
     });
 
-    if (autoRunAfterApply) {
+    if (autoRunPrefs[rule.id]){
       await run();
     }
   }
@@ -457,7 +459,19 @@ export default function Page() {
             <tbody>
               {rules.map(r => (
                 <tr key={r.id} style={{ borderBottom: '1px solid #f1f5f9' }}>
-                  <td style={{ padding: 8 }}>{r.name}</td>
+                  <td style={{ padding: 8 }}>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <input
+                        type="checkbox"
+                        checked={!!autoRunPrefs[r.id]}
+                        onChange={(e) =>
+                          setAutoRunPrefs(prev => ({ ...prev, [r.id]: e.target.checked }))
+                        }
+                      />
+                      {r.name}
+                    </label>
+                  </td>
+
                   <td style={{ padding: 8, color: '#64748b' }}>{new Date(r.updatedAt).toLocaleString()}</td>
                   <td style={{ padding: 8, display: 'flex', gap: 8 }}>
                     <button
