@@ -37,11 +37,13 @@ export const priceChangeFilter: FilterModule = {
     }
     return [];
   },
+
   fromAST: (ast) =>
     ast.type === 'condition' && ast.id === 'pv.priceChangePctN'
       ? { pct: String(ast.params?.pct ?? ''), days: String(ast.params?.days ?? '') }
       : undefined,
-   summarize: (v): Record<string, string> => {
+
+  summarize: (v): Record<string, string> => {
     const out: Record<string, string> = {};
     const pct = Number(v?.pct);
     const days = Number(v?.days);
@@ -49,5 +51,4 @@ export const priceChangeFilter: FilterModule = {
     if (Number.isFinite(days)) out['Over last (days)'] = String(days);
     return out;
   }
-
 };

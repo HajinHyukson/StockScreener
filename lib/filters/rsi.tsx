@@ -16,8 +16,10 @@ export const rsiFilter: FilterModule = {
           style={{ width: '100%' }}
         >
           <option value="daily">Daily</option>
-          <option value="1min">1 min</option><option value="5min">5 min</option>
-          <option value="15min">15 min</option><option value="30min">30 min</option>
+          <option value="1min">1 min</option>
+          <option value="5min">5 min</option>
+          <option value="15min">15 min</option>
+          <option value="30min">30 min</option>
           <option value="1hour">1 hour</option>
         </select>
       </div>
@@ -75,14 +77,13 @@ export const rsiFilter: FilterModule = {
       : undefined,
 
   summarize: (v): Record<string, string> => {
-   const out: Record<string, string> = {};
-   const thr = Number(v?.value);
-   if (!Number.isFinite(thr)) return out;
-   out['RSI timeframe'] = String(v?.timeframe ?? 'daily');
-   out['RSI period'] = String(v?.period ?? '14');
-   out['RSI condition'] = (v?.op ?? 'lte') === 'lte' ? '≤' : '≥';
-   out['RSI threshold'] = String(thr);
-   return out;
+    const out: Record<string, string> = {};
+    const thr = Number(v?.value);
+    if (!Number.isFinite(thr)) return out;
+    out['RSI timeframe'] = String(v?.timeframe ?? 'daily');
+    out['RSI period'] = String(v?.period ?? '14');
+    out['RSI condition'] = (v?.op ?? 'lte') === 'lte' ? '≤' : '≥';
+    out['RSI threshold'] = String(thr);
+    return out;
   }
-
 };
