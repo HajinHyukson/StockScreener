@@ -1,6 +1,6 @@
 // /app/api/conditions/route.ts
 import { NextResponse } from 'next/server';
-import { CONDITIONS, groupByCategory } from '@/lib/conditions';
+import { CONDITIONS, groupByCategory } from '../../../lib/conditions';
 
 export const runtime = 'nodejs';
 
