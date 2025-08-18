@@ -3,17 +3,27 @@ import { listRules, createRule } from '../../../lib/rulesStore';
 import type { RuleAST } from '../../../lib/types';
 
 export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
+
 
 export async function GET() {
-  return NextResponse.json({ rules: listRules() });
+  try {
+    return NextResponse.json({ rules: listRules() });
+  } catch (e: any) {
+    return NextResponse.json({ error: e?.message ?? 'Server error' }, { status: 500 });
+  }
 }
 
 export async function POST(req: Request) {
-  const body = await req.json();
-  const { name, ast } = body as { name: string; ast: RuleAST };
-  if (!name || !ast) {
-    return NextResponse.json({ error: 'Missing name or ast' }, { status: 400 });
+  try {
+    const body = await req.json();
+    const { name, ast } = body as { name: string; ast: RuleAST };
+    if (!name || !ast) {
+      return NextResponse.json({ error: 'Missing name or ast' }, { status: 400 });
+    }
+    const rule = createRule(name, ast);
+    return NextResponse.json({ rule });
+  } catch (e: any) {
+    return NextResponse.json({ error: e?.message ?? 'Server error' }, { status: 500 });
   }
-  const rule = createRule(name, ast);
-  return NextResponse.json({ rule });
-}
+}  
