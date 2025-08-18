@@ -207,8 +207,12 @@ export default function Page() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ast, limit: Number(limit) || 25 })
       });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const json = await res.json();
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const msg = json?.error || `HTTP ${res.status}`;
+        const detail = json?.detail ? ` — ${json.detail}` : '';
+        throw new Error(msg + detail);
+      }
       const data = Array.isArray(json?.rows) ? json.rows : [];
       setRows(data);
     } catch (e: any) {
@@ -216,7 +220,7 @@ export default function Page() {
     } finally {
       setLoading(false);
     }
-  }
+
 
   async function run() {
     const ast = buildAstFromFilters({
