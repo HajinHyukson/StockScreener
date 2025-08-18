@@ -427,12 +427,23 @@ export default function Page() {
 
       {/* My Rules list */}
       <div style={{ marginTop: 16, padding: 12, border: '1px solid #e2e8f0', borderRadius: 12 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-          <div style={{ fontWeight: 600 }}>My Rules</div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 12, flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <div style={{ fontWeight: 600 }}>My Rules</div>
+            <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#475569' }}>
+              <input
+                type="checkbox"
+                checked={autoRunAfterApply}
+               onChange={(e) => setAutoRunAfterApply(e.target.checked)}
+              />
+               Auto-run after Apply
+           </label>
+          </div>
           <button onClick={loadRules} disabled={loadingRules} style={{ padding: '6px 10px' }}>
             {loadingRules ? 'Refreshing…' : 'Refresh'}
-          </button>
-        </div>
+        </button>
+       </div>
+
         {rulesError && <div style={{ color: '#b91c1c', marginTop: 8 }}>Error: {rulesError}</div>}
         <div style={{ marginTop: 8, overflowX: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
