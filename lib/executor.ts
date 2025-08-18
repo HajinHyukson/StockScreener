@@ -1,106 +1,166 @@
-import type { QueryPlan, ScreenerRow, HistoricalFilter } from './types';
-import { fetchHistorical, computePriceChangePctNDays, computeVolumeChangePctNDays } from './historical';
-import type { QueryPlan, ScreenerRow, TechnicalFilterRSI } from './types';
+import type {
+  QueryPlan,
+  ScreenerRow,
+  HistoricalFilter,
+  TechnicalFilterRSI
+} from './types';
 import { fetchRSI } from './technical';
-// If no technical filters, return as-is
-if (!plan.technical.length) return rows;
 
-// Extract single RSI filter(s) (you can extend later for multiple)
-const rsiFilters = plan.technical.filter(t => t.kind === 'rsi') as TechnicalFilterRSI[];
-if (!rsiFilters.length) return rows;
+// If you already have these utilities, keep your existing ones:
+import {
+  fetchHistorical,                    // (symbol, maxDays, apiKey) => price/volume series
+  computePriceChangePctNDays,         // (series, days) => number | undefined
+  computeVolumeChangePctNDays         // (series, days) => number | undefined
+} from './historical';
 
-// For now, assume a single RSI condition; if multiple, you can AND them
-const rsi = rsiFilters[0];
+const MAX_CONCURRENCY = Number(process.env.MAX_CONCURRENCY ?? 6);
 
-const runRSI = pLimit(MAX_CONCURRENCY, async (row: ScreenerRow) => {
-  try {
-    const data = await fetchRSI(row.symbol, rsi.timeframe, rsi.period, apiKey);
-    const val = data.value;
-    if (typeof val !== 'number') {
-      // no data → treat as not passing RSI condition
-      return null;
-    }
-    const pass = rsi.op === 'lte' ? val <= rsi.value : val >= rsi.value;
-
-    if (!pass) return null;
-
-    // Attach RSI + explain
-    (row as any).rsi = val;
-    const ex = (row.explain ?? []);
-    ex.push({ id: 'ti.rsi', pass: true, value: val.toFixed(2) });
-    row.explain = ex;
-    return row;
-  } catch {
-    return null;
-  }
-});
-
-const settledRSI = await Promise.allSettled(rows.map((r) => runRSI(r)));
-const filteredRSI: ScreenerRow[] = [];
-for (const s of settledRSI) {
-  if (s.status === 'fulfilled' && s.value) filteredRSI.push(s.value);
+/** Minimal p-limit to bound upstream calls */
+function pLimit<T extends (...args: any[]) => Promise<any>>(concurrency: number, fn: T) {
+  let active = 0;
+  const queue: (() => void)[] = [];
+  const next = () => {
+    active--;
+    const job = queue.shift();
+    if (job) job();
+  };
+  return (...args: Parameters<T>) =>
+    new Promise<ReturnType<T>>((resolve, reject) => {
+      const run = () => {
+        active++;
+        fn(...args).then((r) => { next(); resolve(r as any); })
+                   .catch((e) => { next(); reject(e); });
+      };
+      if (active < concurrency) run();
+      else queue.push(run);
+    });
 }
-return filteredRSI;
 
 function buildScreenerUrl(base: QueryPlan['base'], limit: number, apiKey: string): string {
   const params = new URLSearchParams();
-  base.forEach(b => {
+  for (const b of base) {
     params.set(b.fmpParam, String(b.value));
-  });
+  }
   params.set('limit', String(limit));
   params.set('apikey', apiKey);
   return `https://financialmodelingprep.com/api/v3/stock-screener?${params.toString()}`;
 }
 
-function passesHistoricalFilters(series: any[], filters: HistoricalFilter[], row: ScreenerRow): boolean {
+type Explain = { id: string; pass: boolean; value?: string };
+
+function explainForSeries(series: any[], filters: HistoricalFilter[]): Explain[] {
+  const ex: Explain[] = [];
   for (const f of filters) {
-    if (f.metric === 'priceChangePctNDays') {
-      const pct = computePriceChangePctNDays(series as any, f.days);
-      if (pct === undefined || pct < f.pct) return false;
-      row.priceChangePct = pct;
-    } else if (f.metric === 'volumeChangePctNDays') {
-      const pct = computeVolumeChangePctNDays(series as any, f.days);
-      if (pct === undefined || pct < f.pct) return false;
-      // (we’re not storing volume pct on row yet; add if needed)
+    if (f.kind === 'priceChangePctNDays') {
+      const pct = computePriceChangePctNDays(series, f.days);
+      ex.push({ id: 'pv.priceChangePctN', pass: pct !== undefined && pct >= f.pct, value: pct?.toFixed(2) });
+    } else if (f.kind === 'volumeChangePctNDays') {
+      const pct = computeVolumeChangePctNDays(series, f.days);
+      ex.push({ id: 'pv.volumeChangePctN', pass: pct !== undefined && pct >= f.pct, value: pct?.toFixed(2) });
     }
   }
-  return true;
+  return ex;
 }
 
-export async function executePlan(plan: QueryPlan, limit: number, apiKey: string): Promise<ScreenerRow[]> {
-  // 1) Fetch base list from FMP screener
+function passesAll(ex: Explain[]) {
+  return ex.every(e => e.pass);
+}
+
+/**
+ * Execute the plan:
+ *  1) Call FMP screener for base filters
+ *  2) If historical filters exist, fetch series and compute features
+ *  3) If RSI filters exist, fetch RSI and filter rows
+ *  Returns the filtered/enhanced rows (with explain data)
+ */
+export async function executePlan(
+  plan: QueryPlan,
+  limit: number,
+  apiKey: string
+): Promise<(ScreenerRow & { explain?: Explain[] })[]> {
+
+  // 1) Base screener
   const url = buildScreenerUrl(plan.base, limit, apiKey);
   const res = await fetch(url, { cache: 'no-store' });
   if (!res.ok) throw new Error(`Screener ${res.status}`);
   const baseRows = (await res.json()) as any[];
 
-  // Shape to our row type
-  const rows: ScreenerRow[] = baseRows.map((r) => ({
+  const rows: (ScreenerRow & { explain?: Explain[] })[] = baseRows.map((r) => ({
     symbol: r.symbol,
-    companyName: r.companyName ?? r.companyName ?? r.companyName,
+    companyName: r.companyName ?? r.companyName,
     price: r.price,
     marketCap: r.marketCap,
     sector: r.sector,
     volume: r.volume
   }));
 
-  // 2) If no historical filters, we’re done
-  if (!plan.historical.length) return rows;
+  // Short circuit if nothing else to compute
+  const needHistorical = plan.historical.length > 0;
+  const needTechnical = plan.technical.length > 0;
+  if (!needHistorical && !needTechnical) return rows;
 
-  // Determine max days required
-  const maxDays = Math.max(...plan.historical.map(h => ('days' in h ? h.days : 0)));
+  // 2) Historical evaluation
+  let afterHistorical: (ScreenerRow & { explain?: Explain[] })[] = rows;
+  if (needHistorical) {
+    const maxDays = Math.max(...plan.historical.map(h => ('days' in h ? h.days : 0)));
+    const runSymbolHist = pLimit(MAX_CONCURRENCY, async (row: (ScreenerRow & { explain?: Explain[] })) => {
+      try {
+        const series = await fetchHistorical(row.symbol, maxDays, apiKey);
+        const ex = explainForSeries(series, plan.historical);
+        if (!passesAll(ex)) return null;
 
-  // 3) For each symbol, fetch historical once and test filters
-  const out: ScreenerRow[] = [];
-  for (const row of rows) {
-    try {
-      const series = await fetchHistorical(row.symbol, maxDays, apiKey);
-      if (passesHistoricalFilters(series, plan.historical, row)) {
-        out.push(row);
+        // attach computed values for table (e.g., priceChangePct)
+        const priceEx = ex.find(e => e.id === 'pv.priceChangePctN' && e.value !== undefined);
+        if (priceEx) row.priceChangePct = Number(priceEx.value);
+        row.explain = (row.explain ?? []).concat(ex);
+        return row;
+      } catch {
+        return null;
       }
-    } catch {
-      // skip on error per-symbol
+    });
+
+    const settled = await Promise.allSettled(afterHistorical.map((r) => runSymbolHist(r)));
+    const filtered: (ScreenerRow & { explain?: Explain[] })[] = [];
+    for (const s of settled) {
+      if (s.status === 'fulfilled' && s.value) filtered.push(s.value);
     }
+    afterHistorical = filtered;
   }
-  return out;
+
+  // 3) Technical (RSI) evaluation
+  if (!needTechnical) return afterHistorical;
+
+  const rsiFilters = plan.technical.filter(t => t.kind === 'rsi') as TechnicalFilterRSI[];
+  if (!rsiFilters.length) return afterHistorical;
+
+  // for now AND all RSI filters (usually one)
+  const runRSI = pLimit(MAX_CONCURRENCY, async (row: (ScreenerRow & { explain?: Explain[] })) => {
+    try {
+      for (const f of rsiFilters) {
+        const data = await fetchRSI(row.symbol, f.timeframe, f.period, apiKey);
+        const val = data.value;
+        if (typeof val !== 'number') {
+          return null; // no data => fail the RSI condition
+        }
+        const pass = f.op === 'lte' ? val <= f.value : val >= f.value;
+        if (!pass) return null;
+
+        // Attach RSI + explain
+        row.rsi = val;
+        row.explain = (row.explain ?? []);
+        row.explain.push({ id: 'ti.rsi', pass: true, value: val.toFixed(2) });
+      }
+      return row;
+    } catch {
+      return null;
+    }
+  });
+
+  const settledRSI = await Promise.allSettled(afterHistorical.map((r) => runRSI(r)));
+  const filteredRSI: (ScreenerRow & { explain?: Explain[] })[] = [];
+  for (const s of settledRSI) {
+    if (s.status === 'fulfilled' && s.value) filteredRSI.push(s.value);
+  }
+
+  return filteredRSI;
 }

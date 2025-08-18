@@ -1,3 +1,8 @@
+/**
+ * Fetch RSI with lightweight in-memory caching.
+ * Supports both daily and intraday intervals via FMP.
+ */
+
 const RSI_CACHE_SECONDS = Number(process.env.RSI_CACHE_SECONDS ?? 90);
 type CacheEntry = { expires: number; data: { value?: number; asOf?: string } };
 const rsiCache = new Map<string, CacheEntry>();
@@ -6,7 +11,12 @@ function key(symbol: string, tf: string, period: number) {
   return `${symbol}|${tf}|${period}`;
 }
 
-export async function fetchRSI(symbol: string, timeframe: 'daily' | '1min' | '5min' | '15min' | '30min' | '1hour', period: number, apiKey: string) {
+export async function fetchRSI(
+  symbol: string,
+  timeframe: 'daily' | '1min' | '5min' | '15min' | '30min' | '1hour',
+  period: number,
+  apiKey: string
+): Promise<{ value?: number; asOf?: string }> {
   const k = key(symbol, timeframe, period);
   const now = Date.now();
   const hit = rsiCache.get(k);
@@ -22,7 +32,7 @@ export async function fetchRSI(symbol: string, timeframe: 'daily' | '1min' | '5m
   if (!res.ok) throw new Error(`RSI ${res.status}`);
 
   const arr = await res.json();
-  // FMP returns newest last or first depending on endpoint; be robust:
+  // Be defensive about order (some endpoints return newest last/first)
   const last = Array.isArray(arr) && arr.length ? arr[arr.length - 1] : null;
   const first = Array.isArray(arr) && arr.length ? arr[0] : null;
   const pick = last?.rsi !== undefined ? last : first;

@@ -1,20 +1,9 @@
-// /lib/types.ts
+/** Core AST used by UI and compiler */
 export type RuleAST =
   | { type: 'condition'; id: string; params: Record<string, any> }
   | { type: 'AND' | 'OR' | 'NOT'; children: RuleAST[] };
-// ---- Compile/execute types ----
-export type BaseFilter =
-  | { kind: 'base'; fmpParam: 'exchange' | 'sector' | 'marketCapMoreThan' | 'marketCapLowerThan'; value: string | number };
 
-export type HistoricalFilter =
-  | { kind: 'historical'; metric: 'priceChangePctNDays'; pct: number; days: number }
-  | { kind: 'historical'; metric: 'volumeChangePctNDays'; pct: number; days: number };
-
-export type QueryPlan = {
-  base: BaseFilter[];            // mapped to FMP screener params
-  historical: HistoricalFilter[]; // computed per symbol using historical data
-};
-
+/** Stock row returned to the client */
 export type ScreenerRow = {
   symbol: string;
   companyName?: string;
@@ -22,32 +11,39 @@ export type ScreenerRow = {
   marketCap?: number;
   sector?: string;
   volume?: number;
-  priceChangePct?: number;   // optional: if computed
+  priceChangePct?: number; // computed (N-day price % change)
+  rsi?: number;            // latest RSI value when requested
+  explain?: { id: string; pass: boolean; value?: string }[]; // per-condition evidence
 };
+
+/** Base (FMP screener) filters compiled from AST */
+export type BaseFilter =
+  | { fmpParam: 'exchange'; value: string }
+  | { fmpParam: 'sector'; value: string }
+  | { fmpParam: 'marketCapMoreThan'; value: number }
+  | { fmpParam: 'marketCapLowerThan'; value: number };
+
+/** Historical filters (computed from price/volume history) */
+export type HistoricalFilter =
+  | { kind: 'priceChangePctNDays'; days: number; pct: number }      // >= pct
+  | { kind: 'volumeChangePctNDays'; days: number; pct: number };     // >= pct
+
+/** Technical filters (FMP technical indicator endpoints) */
 export type TechnicalFilterRSI = {
   kind: 'rsi';
   timeframe: 'daily' | '1min' | '5min' | '15min' | '30min' | '1hour';
-  period: number;
-  op: 'lte' | 'gte';
-  value: number;
+  period: number;                 // e.g., 14
+  op: 'lte' | 'gte';              // ≤ or ≥
+  value: number;                  // threshold
 };
 
-// If you have a generic plan type, add a technical array:
+/** Executable plan assembled by the compiler */
 export type QueryPlan = {
-  base: { fmpParam: string; value: string | number }[];
-  historical: any[]; // existing
-  technical: (TechnicalFilterRSI)[]; // ADD
+  base: BaseFilter[];                       // maps to FMP /stock-screener params
+  historical: HistoricalFilter[];           // pulls price/volume series, compute features
+  technical: (TechnicalFilterRSI)[];        // calls technical indicator API
 };
 
-// Extend row
-export type ScreenerRow = {
-  symbol: string;
-  companyName?: string;
-  price?: number;
-  marketCap?: number;
-  sector?: string;
-  volume?: number;
-  priceChangePct?: number;
-  rsi?: number; // ADD
-  explain?: { id: string; pass: boolean; value?: string }[];
-};
+
+
+
