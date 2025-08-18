@@ -1,4 +1,4 @@
- 'use client';
+'use client';
 import { useEffect, useMemo, useState } from 'react';
 
 /** ----------------- Types ----------------- */
@@ -41,9 +41,7 @@ function formatPct(n?: number) {
   return `${sign}${n.toFixed(2)}%`;
 }
 
-/** Build a Rule AST from current filters.
- *  Maps UI → condition IDs from /lib/conditions.ts
- */
+/** Build a Rule AST from current filters (UI → AST) */
 function buildAstFromFilters(opts: {
   exchange: string;
   sector: string;
@@ -56,7 +54,6 @@ function buildAstFromFilters(opts: {
 }): RuleAST {
   const children: RuleAST[] = [];
 
-  // Always persist exchange (so the rule replays the same universe)
   if (opts.exchange) {
     children.push({ type: 'condition', id: 'base.exchange', params: { value: opts.exchange } });
   }
@@ -71,27 +68,18 @@ function buildAstFromFilters(opts: {
     const v = Number(opts.mktMax);
     if (Number.isFinite(v)) children.push({ type: 'condition', id: 'base.marketCapMax', params: { value: v } });
   }
-  // Only add change conditions if both threshold and days are provided
   if (opts.priceChangePctMin && opts.priceChangeDays) {
     const pct = Number(opts.priceChangePctMin);
     const days = Number(opts.priceChangeDays);
     if (Number.isFinite(pct) && Number.isFinite(days) && days > 0) {
-      children.push({
-        type: 'condition',
-        id: 'pv.priceChangePctN',
-        params: { pct, days }
-      });
+      children.push({ type: 'condition', id: 'pv.priceChangePctN', params: { pct, days } });
     }
   }
   if (opts.volChangePctMin && opts.volChangeDays) {
     const pct = Number(opts.volChangePctMin);
     const days = Number(opts.volChangeDays);
     if (Number.isFinite(pct) && Number.isFinite(days) && days > 0) {
-      children.push({
-        type: 'condition',
-        id: 'pv.volumeChangePctN',
-        params: { pct, days }
-      });
+      children.push({ type: 'condition', id: 'pv.volumeChangePctN', params: { pct, days } });
     }
   }
 
@@ -101,7 +89,7 @@ function buildAstFromFilters(opts: {
   return children.length === 1 ? children[0] : { type: 'AND', children };
 }
 
-/** Merge a Rule AST back into the current filter UI state */
+/** Merge a Rule AST back into the current filter UI state (AST → UI) */
 function applyAstToFilters(ast: RuleAST, set: {
   setExchange: (v: string) => void;
   setSector: (v: string) => void;
@@ -138,7 +126,6 @@ function applyAstToFilters(ast: RuleAST, set: {
           if (typeof p.pct === 'number')  set.setVolChangePctMin(String(p.pct));
           if (typeof p.days === 'number') set.setVolChangeDays(String(p.days));
           break;
-        // extend with new condition IDs as you add them
       }
       return;
     }
@@ -147,6 +134,39 @@ function applyAstToFilters(ast: RuleAST, set: {
     }
   }
   walk(ast);
+}
+
+/** Extract a friendly view model from AST: only show fields with values */
+function summarizeAst(ast: RuleAST) {
+  const out: Record<string, string> = {};
+  function put(key: string, val: string | number | undefined) {
+    if (val === undefined || val === '' || val === null) return;
+    out[key] = String(val);
+  }
+  function walk(node: RuleAST) {
+    if (!node) return;
+    if (node.type === 'condition') {
+      const id = node.id;
+      const p = node.params || {};
+      if (id === 'base.exchange') put('Exchange', p.value);
+      else if (id === 'base.sector') put('Sector', p.value);
+      else if (id === 'base.marketCapMin') put('Market Cap Min (USD)', p.value);
+      else if (id === 'base.marketCapMax') put('Market Cap Max (USD)', p.value);
+      else if (id === 'pv.priceChangePctN') {
+        put('Price change ≥ (%)', p.pct);
+        put('Over last (days)', p.days);
+      } else if (id === 'pv.volumeChangePctN') {
+        put('Volume change ≥ (%)', p.pct);
+        put('Over last (days) [volume]', p.days);
+      }
+      return;
+    }
+    if ((node.type === 'AND' || node.type === 'OR' || node.type === 'NOT') && Array.isArray((node as any).children)) {
+      (node as any).children.forEach(walk);
+    }
+  }
+  walk(ast);
+  return out;
 }
 
 /** ----------------- Page ----------------- */
@@ -181,9 +201,10 @@ export default function Page() {
   const [rules, setRules] = useState<SavedRule[]>([]);
   const [loadingRules, setLoadingRules] = useState(false);
   const [rulesError, setRulesError] = useState<string | null>(null);
-  // Track per-rule auto-run preference
-  const [autoRunPrefs, setAutoRunPrefs] = useState<Record<string, boolean>>({});
-  const [autoRunAfterApply, setAutoRunAfterApply] = useState(false);
+
+  // View modal state
+  const [viewOpen, setViewOpen] = useState(false);
+  const [viewData, setViewData] = useState<{ name: string; fields: Record<string, string> } | null>(null);
 
   async function run() {
     setLoading(true); setErr(null); setPage(1);
@@ -294,8 +315,8 @@ export default function Page() {
     }
   }
 
-  async function applyRule(rule: SavedRule) {
-    // Optional reset for predictable UX
+  async function applyRuleAndRun(rule: SavedRule) {
+    // Reset relevant filters (optional/predictable)
     setSector('');
     setMktMin('');
     setMktMax('');
@@ -304,7 +325,6 @@ export default function Page() {
     setVolChangePctMin('');
     setVolChangeDays('');
 
-    // Merge AST → UI
     applyAstToFilters(rule.ast, {
       setExchange,
       setSector,
@@ -316,9 +336,13 @@ export default function Page() {
       setVolChangeDays
     });
 
-    if (autoRunPrefs[rule.id]){
-      await run();
-    }
+    await run();
+  }
+
+  function openViewModal(rule: SavedRule) {
+    const fields = summarizeAst(rule.ast);
+    setViewData({ name: rule.name, fields });
+    setViewOpen(true);
   }
 
   useEffect(() => {
@@ -429,23 +453,12 @@ export default function Page() {
 
       {/* My Rules list */}
       <div style={{ marginTop: 16, padding: 12, border: '1px solid #e2e8f0', borderRadius: 12 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 12, flexWrap: 'wrap' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <div style={{ fontWeight: 600 }}>My Rules</div>
-            <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#475569' }}>
-              <input
-                type="checkbox"
-                checked={autoRunAfterApply}
-               onChange={(e) => setAutoRunAfterApply(e.target.checked)}
-              />
-               Auto-run after Apply
-           </label>
-          </div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+          <div style={{ fontWeight: 600 }}>My Rules</div>
           <button onClick={loadRules} disabled={loadingRules} style={{ padding: '6px 10px' }}>
             {loadingRules ? 'Refreshing…' : 'Refresh'}
-        </button>
-       </div>
-
+          </button>
+        </div>
         {rulesError && <div style={{ color: '#b91c1c', marginTop: 8 }}>Error: {rulesError}</div>}
         <div style={{ marginTop: 8, overflowX: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
@@ -460,33 +473,26 @@ export default function Page() {
               {rules.map(r => (
                 <tr key={r.id} style={{ borderBottom: '1px solid #f1f5f9' }}>
                   <td style={{ padding: 8 }}>
-                    <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                      <input
-                        type="checkbox"
-                        checked={!!autoRunPrefs[r.id]}
-                        onChange={(e) =>
-                          setAutoRunPrefs(prev => ({ ...prev, [r.id]: e.target.checked }))
-                        }
-                      />
+                    {/* Name as hyperlink → apply + run */}
+                    <a
+                      href="#"
+                      onClick={(e) => { e.preventDefault(); applyRuleAndRun(r); }}
+                      style={{ color: '#2563eb', textDecoration: 'none' }}
+                      onMouseEnter={(e) => (e.currentTarget.style.textDecoration = 'underline')}
+                      onMouseLeave={(e) => (e.currentTarget.style.textDecoration = 'none')}
+                      title="Click to apply this rule and run"
+                    >
                       {r.name}
-                    </label>
+                    </a>
                   </td>
-
                   <td style={{ padding: 8, color: '#64748b' }}>{new Date(r.updatedAt).toLocaleString()}</td>
                   <td style={{ padding: 8, display: 'flex', gap: 8 }}>
                     <button
-                      onClick={() => alert(JSON.stringify(r.ast, null, 2))}
-                      title="View AST JSON"
+                      onClick={() => openViewModal(r)}
+                      title="View rule details"
                       style={{ padding: '6px 10px' }}
                     >
                       View
-                    </button>
-                    <button
-                      onClick={() => applyRule(r)}
-                      title="Apply rule to filters and run"
-                      style={{ padding: '6px 10px' }}
-                    >
-                      Apply
                     </button>
                     <button
                       onClick={() => deleteRule(r.id)}
@@ -574,6 +580,45 @@ export default function Page() {
         <div style={{ fontSize: 12, color: '#64748b' }}>Page {page} / {totalPages}</div>
         <button onClick={() => setPage(p => Math.min(totalPages, p + 1))} disabled={page >= totalPages}>Next</button>
       </div>
+
+      {/* ---------- View Modal ---------- */}
+      {viewOpen && viewData && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          style={{
+            position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.45)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16
+          }}
+          onClick={() => setViewOpen(false)}
+        >
+          <div
+            style={{ background: 'white', borderRadius: 12, width: '100%', maxWidth: 520, boxShadow: '0 10px 30px rgba(0,0,0,0.2)' }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ padding: 16, borderBottom: '1px solid #e5e7eb', display: 'flex', justifyContent: 'space-between' }}>
+              <div style={{ fontWeight: 700 }}>{viewData.name}</div>
+              <button onClick={() => setViewOpen(false)} style={{ padding: '6px 10px' }}>Close</button>
+            </div>
+            <div style={{ padding: 16 }}>
+              <dl style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                {Object.entries(viewData.fields).map(([k, v]) => (
+                  <div key={k} style={{ display: 'contents' }}>
+                    <dt style={{ color: '#64748b' }}>{k}</dt>
+                    <dd style={{ textAlign: 'right' }}>{v}</dd>
+                  </div>
+                ))}
+              </dl>
+              {Object.keys(viewData.fields).length === 0 && (
+                <div style={{ color: '#64748b' }}>No parameters set for this rule.</div>
+              )}
+            </div>
+            <div style={{ padding: 16, borderTop: '1px solid #e5e7eb', display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+              <button onClick={() => setViewOpen(false)} style={{ padding: '8px 14px' }}>OK</button>
+            </div>
+          </div>
+        </div>
+      )}
     </main>
   );
 }
