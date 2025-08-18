@@ -1,5 +1,46 @@
 import type { QueryPlan, ScreenerRow, HistoricalFilter } from './types';
 import { fetchHistorical, computePriceChangePctNDays, computeVolumeChangePctNDays } from './historical';
+import type { QueryPlan, ScreenerRow, TechnicalFilterRSI } from './types';
+import { fetchRSI } from './technical';
+// If no technical filters, return as-is
+if (!plan.technical.length) return rows;
+
+// Extract single RSI filter(s) (you can extend later for multiple)
+const rsiFilters = plan.technical.filter(t => t.kind === 'rsi') as TechnicalFilterRSI[];
+if (!rsiFilters.length) return rows;
+
+// For now, assume a single RSI condition; if multiple, you can AND them
+const rsi = rsiFilters[0];
+
+const runRSI = pLimit(MAX_CONCURRENCY, async (row: ScreenerRow) => {
+  try {
+    const data = await fetchRSI(row.symbol, rsi.timeframe, rsi.period, apiKey);
+    const val = data.value;
+    if (typeof val !== 'number') {
+      // no data → treat as not passing RSI condition
+      return null;
+    }
+    const pass = rsi.op === 'lte' ? val <= rsi.value : val >= rsi.value;
+
+    if (!pass) return null;
+
+    // Attach RSI + explain
+    (row as any).rsi = val;
+    const ex = (row.explain ?? []);
+    ex.push({ id: 'ti.rsi', pass: true, value: val.toFixed(2) });
+    row.explain = ex;
+    return row;
+  } catch {
+    return null;
+  }
+});
+
+const settledRSI = await Promise.allSettled(rows.map((r) => runRSI(r)));
+const filteredRSI: ScreenerRow[] = [];
+for (const s of settledRSI) {
+  if (s.status === 'fulfilled' && s.value) filteredRSI.push(s.value);
+}
+return filteredRSI;
 
 function buildScreenerUrl(base: QueryPlan['base'], limit: number, apiKey: string): string {
   const params = new URLSearchParams();

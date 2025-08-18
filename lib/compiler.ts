@@ -47,4 +47,18 @@ export function compileRule(ast: RuleAST): QueryPlan {
   }
 
   return { base, historical };
+  // Ensure plan.technical exists
+const plan: QueryPlan = { base: [], historical: [], technical: [] };
+
+// Inside your AST visitor for condition nodes:
+if (node.id === 'ti.rsi') {
+  const tf = (node.params?.timeframe ?? 'daily') as TechnicalFilterRSI['timeframe'];
+  const period = Number(node.params?.period ?? 14);
+  const op = (node.params?.op ?? 'lte') as 'lte' | 'gte';
+  const value = Number(node.params?.value);
+  if (Number.isFinite(period) && Number.isFinite(value)) {
+    plan.technical.push({ kind: 'rsi', timeframe: tf, period, op, value });
+  }
+}
+
 }

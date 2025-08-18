@@ -24,3 +24,30 @@ export type ScreenerRow = {
   volume?: number;
   priceChangePct?: number;   // optional: if computed
 };
+export type TechnicalFilterRSI = {
+  kind: 'rsi';
+  timeframe: 'daily' | '1min' | '5min' | '15min' | '30min' | '1hour';
+  period: number;
+  op: 'lte' | 'gte';
+  value: number;
+};
+
+// If you have a generic plan type, add a technical array:
+export type QueryPlan = {
+  base: { fmpParam: string; value: string | number }[];
+  historical: any[]; // existing
+  technical: (TechnicalFilterRSI)[]; // ADD
+};
+
+// Extend row
+export type ScreenerRow = {
+  symbol: string;
+  companyName?: string;
+  price?: number;
+  marketCap?: number;
+  sector?: string;
+  volume?: number;
+  priceChangePct?: number;
+  rsi?: number; // ADD
+  explain?: { id: string; pass: boolean; value?: string }[];
+};

@@ -22,6 +22,7 @@ type Row = {
   sector?: string;
   volume?: number;
   priceChangePct?: number;
+  rsi?: number;
   explain?: { id: string; pass: boolean; value?: string }[];
 };
 
@@ -44,10 +45,32 @@ function formatPct(n?: number) {
 function formatKST(iso?: string) {
   if (!iso) return '—';
   const d = new Date(iso);
-  return d.toLocaleString('en-US', { timeZone: 'Asia/Seoul', year: 'numeric', month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+  return d.toLocaleString('en-US', {
+    timeZone: 'Asia/Seoul',
+    year: 'numeric',
+    month: 'short',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit'
+  });
 }
 
-/** Build AST (UI → AST) */
+/** Market cap options builder */
+function marketCapOptions(): { label: string; value: string }[] {
+  const opts: { label: string; value: string }[] = [{ label: 'Any', value: '' }];
+  // 500M
+  opts.push({ label: '$500M', value: String(500_000_000) });
+  // 500B steps up to 5T
+  for (let v = 500_000_000_000; v <= 5_000_000_000_000; v += 500_000_000_000) {
+    const trillions = v / 1_000_000_000_000;
+    const billions = v / 1_000_000_000;
+    const label = v >= 1_000_000_000_000 ? `$${trillions}T` : `$${billions}B`;
+    opts.push({ label, value: String(v) });
+  }
+  return opts;
+}
+
+/** ================= Build AST (UI → AST) ================= */
 function buildAstFromFilters(opts: {
   exchange: string;
   sector: string;
@@ -55,6 +78,11 @@ function buildAstFromFilters(opts: {
   mktMax: string;
   priceChangePctMin: string;
   priceChangeDays: string;
+  // RSI
+  rsiTimeframe: string;
+  rsiPeriod: string;
+  rsiOp: string;
+  rsiThreshold: string;
 }): RuleAST {
   const children: RuleAST[] = [];
 
@@ -79,6 +107,20 @@ function buildAstFromFilters(opts: {
       children.push({ type: 'condition', id: 'pv.priceChangePctN', params: { pct, days } });
     }
   }
+  // RSI condition
+  if (opts.rsiThreshold) {
+    const th = Number(opts.rsiThreshold);
+    const period = Number(opts.rsiPeriod || '14');
+    const tf = (opts.rsiTimeframe || 'daily') as any;
+    const op = (opts.rsiOp || 'lte') as any;
+    if (Number.isFinite(th) && Number.isFinite(period)) {
+      children.push({
+        type: 'condition',
+        id: 'ti.rsi',
+        params: { timeframe: tf, period, op, value: th }
+      });
+    }
+  }
 
   if (children.length === 0) {
     return { type: 'condition', id: 'base.exchange', params: { value: opts.exchange || 'NASDAQ' } };
@@ -86,7 +128,7 @@ function buildAstFromFilters(opts: {
   return children.length === 1 ? children[0] : { type: 'AND', children };
 }
 
-/** Apply AST (AST → UI) */
+/** ================= Apply AST (AST → UI) ================= */
 function applyAstToFilters(ast: RuleAST, set: {
   setExchange: (v: string) => void;
   setSector: (v: string) => void;
@@ -94,6 +136,11 @@ function applyAstToFilters(ast: RuleAST, set: {
   setMktMax: (v: string) => void;
   setPriceChangePctMin: (v: string) => void;
   setPriceChangeDays: (v: string) => void;
+  // RSI
+  setRsiTimeframe: (v: any) => void;
+  setRsiPeriod: (v: string) => void;
+  setRsiOp: (v: any) => void;
+  setRsiThreshold: (v: string) => void;
 }) {
   function walk(node: RuleAST) {
     if (!node) return;
@@ -116,6 +163,12 @@ function applyAstToFilters(ast: RuleAST, set: {
           if (typeof params.pct === 'number') set.setPriceChangePctMin(String(params.pct));
           if (typeof params.days === 'number') set.setPriceChangeDays(String(params.days));
           break;
+        case 'ti.rsi':
+          if (typeof params.timeframe === 'string') set.setRsiTimeframe(params.timeframe);
+          if (typeof params.period === 'number') set.setRsiPeriod(String(params.period));
+          if (typeof params.op === 'string') set.setRsiOp(params.op);
+          if (typeof params.value === 'number') set.setRsiThreshold(String(params.value));
+          break;
       }
       return;
     }
@@ -126,7 +179,7 @@ function applyAstToFilters(ast: RuleAST, set: {
   walk(ast);
 }
 
-/** Summarize AST (for “View Rule”) */
+/** ================= Summarize AST (for “View Rule”) ================= */
 function summarizeAst(ast: RuleAST) {
   const out: Record<string, string> = {};
   function put(key: string, val: any) {
@@ -143,6 +196,15 @@ function summarizeAst(ast: RuleAST) {
       else if (id === 'pv.priceChangePctN') {
         put('Price change ≥ (%)', params.pct);
         put('Over last (days)', params.days);
+      } else if (id === 'ti.rsi') {
+        const tf = params.timeframe || 'daily';
+        const per = params.period ?? 14;
+        const op = params.op || 'lte';
+        const val = params.value;
+        put('RSI timeframe', tf);
+        put('RSI period', per);
+        put('RSI condition', op === 'lte' ? '≤' : '≥');
+        put('RSI threshold', val);
       }
       return;
     }
@@ -154,21 +216,6 @@ function summarizeAst(ast: RuleAST) {
   return out;
 }
 
-/** Market cap options builder */
-function marketCapOptions(): { label: string; value: string }[] {
-  const opts: { label: string; value: string }[] = [{ label: 'Any', value: '' }];
-  // 500M
-  opts.push({ label: '$500M', value: String(500_000_000) });
-  // 500B steps up to 5T
-  for (let v = 500_000_000_000; v <= 5_000_000_000_000; v += 500_000_000_000) {
-    const trillions = v / 1_000_000_000_000;
-    const billions = v / 1_000_000_000;
-    const label = v >= 1_000_000_000_000 ? `$${trillions}T` : `$${billions}B`;
-    opts.push({ label, value: String(v) });
-  }
-  return opts;
-}
-
 /** ================= Page Component ================= */
 export default function Page() {
   // Filters
@@ -178,8 +225,11 @@ export default function Page() {
   const [mktMax, setMktMax] = useState('');
   const [priceChangePctMin, setPriceChangePctMin] = useState('');
   const [priceChangeDays, setPriceChangeDays] = useState('');
-  const [helpOpen, setHelpOpen] = useState(false);
-  const [asOf, setAsOf] = useState<string | null>(null);
+  // RSI filters
+  const [rsiTimeframe, setRsiTimeframe] = useState<'daily' | '1min' | '5min' | '15min' | '30min' | '1hour'>('daily');
+  const [rsiPeriod, setRsiPeriod] = useState('14');
+  const [rsiOp, setRsiOp] = useState<'lte' | 'gte'>('lte');
+  const [rsiThreshold, setRsiThreshold] = useState('');
 
   // Data & server pagination
   const [serverLimit, setServerLimit] = useState(50); // hidden default = 50
@@ -209,6 +259,10 @@ export default function Page() {
   const [explainOpen, setExplainOpen] = useState(false);
   const [explainRow, setExplainRow] = useState<Row | null>(null);
 
+  // Help panel + data time
+  const [helpOpen, setHelpOpen] = useState(false);
+  const [asOf, setAsOf] = useState<string | null>(null);
+
   /** Backend runner (/api/run) */
   async function runWithAst(ast: RuleAST, nextLimit?: number, append = false) {
     setLoading(true); setErr(null);
@@ -225,7 +279,7 @@ export default function Page() {
         const detail = (json as any)?.detail ? ` — ${(json as any).detail}` : '';
         throw new Error(msg + detail);
       }
-      // Capture data timestamp from backend if provided; fallback to "now"
+      // Capture "asOf" if provided; fallback to now
       setAsOf((json as any)?.asOf || (json as any)?.timestamp || new Date().toISOString());
 
       const data: Row[] = Array.isArray((json as any)?.rows) ? (json as any).rows : [];
@@ -236,15 +290,18 @@ export default function Page() {
         const newOnes = data.filter(r => !existingSymbols.has(r.symbol));
         const combined = [...rows, ...newOnes];
         setRows(combined);
-        // hasMore heuristic: if no growth, or returned < requestedLimit
-        setHasMore(combined.length < requestedLimit && data.length === requestedLimit ? true : combined.length > rows.length && data.length === requestedLimit);
-        if (combined.length === rows.length || data.length < requestedLimit) setHasMore(false);
+        // Heuristic: if no growth or returned < requestedLimit => end
+        if (combined.length === rows.length || data.length < requestedLimit) {
+          setHasMore(false);
+        } else {
+          setHasMore(true);
+        }
       } else {
         setRows(data);
         setHasMore(data.length >= requestedLimit); // if fewer than requested, likely end
+        setPage(1);
       }
       setServerLimit(requestedLimit);
-      setPage(1);
     } catch (e: any) {
       setErr(e.message ?? 'Error');
       if (!append) setRows([]);
@@ -257,7 +314,8 @@ export default function Page() {
   async function run() {
     const ast = buildAstFromFilters({
       exchange, sector, mktMin, mktMax,
-      priceChangePctMin, priceChangeDays
+      priceChangePctMin, priceChangeDays,
+      rsiTimeframe, rsiPeriod, rsiOp, rsiThreshold
     });
     setServerLimit(50);
     await runWithAst(ast, 50, false);
@@ -266,7 +324,8 @@ export default function Page() {
   async function loadMore() {
     const ast = buildAstFromFilters({
       exchange, sector, mktMin, mktMax,
-      priceChangePctMin, priceChangeDays
+      priceChangePctMin, priceChangeDays,
+      rsiTimeframe, rsiPeriod, rsiOp, rsiThreshold
     });
     const next = serverLimit + 50;
     await runWithAst(ast, next, true);
@@ -278,7 +337,8 @@ export default function Page() {
     try {
       const ast = buildAstFromFilters({
         exchange, sector, mktMin, mktMax,
-        priceChangePctMin, priceChangeDays
+        priceChangePctMin, priceChangeDays,
+        rsiTimeframe, rsiPeriod, rsiOp, rsiThreshold
       });
       const name = ruleName.trim() || `Rule ${new Date().toLocaleString()}`;
       const res = await fetch('/api/rules', {
@@ -319,7 +379,8 @@ export default function Page() {
     // Sync filters to show what’s being used
     applyAstToFilters(rule.ast, {
       setExchange, setSector, setMktMin, setMktMax,
-      setPriceChangePctMin, setPriceChangeDays
+      setPriceChangePctMin, setPriceChangeDays,
+      setRsiTimeframe, setRsiPeriod, setRsiOp, setRsiThreshold
     });
     setServerLimit(50);
     await runWithAst(rule.ast, 50, false);
@@ -362,12 +423,12 @@ export default function Page() {
 
   const today = new Date().toLocaleDateString('en-US', { timeZone: 'Asia/Seoul', year: 'numeric', month: 'short', day: '2-digit' });
   const priceColTitle = priceChangeDays ? `Price (${priceChangeDays} days % change)` : 'Price';
-
   const mcOpts = marketCapOptions();
 
   /** ================= UI ================= */
   return (
     <main style={{ maxWidth: 1150, margin: '40px auto', padding: 16 }}>
+      {/* Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 12, flexWrap: 'wrap' }}>
         <h1 style={{ fontSize: 28, fontWeight: 700, marginRight: 8 }}>Stock Screener</h1>
         <div style={{ marginLeft: 'auto', textAlign: 'right', color: '#64748b' }}>
@@ -375,12 +436,15 @@ export default function Page() {
           <div style={{ fontSize: 12 }}>Data as of: {formatKST(asOf ?? undefined)} (KST)</div>
         </div>
       </div>
+
+      {/* Friendly intro */}
       <p style={{ marginTop: 8, marginBottom: 8, color: '#334155' }}>
         This screener makes it easier to sort through many stocks and focus only on the ones that interest you.
         You can filter by things like exchange, sector, company size, or how the price has been moving.
         Once you find a set of conditions you like, save it as a rule so you can quickly check those stocks again later.
       </p>
 
+      {/* Collapsible help */}
       <div style={{ marginBottom: 10 }}>
         <button
           onClick={() => setHelpOpen(v => !v)}
@@ -393,7 +457,7 @@ export default function Page() {
         {helpOpen && (
           <div id="help-panel" style={{ marginTop: 8, padding: 10, border: '1px solid #e2e8f0', borderRadius: 8, background: '#ffffff' }}>
             <ol style={{ margin: 0, paddingLeft: 18, color: '#334155' }}>
-              <li style={{ marginBottom: 6 }}><b>Set filters</b>: choose the exchange, sector, and market cap range. You can also add a price change condition over a number of days.</li>
+              <li style={{ marginBottom: 6 }}><b>Set filters</b>: choose the exchange, sector, and market cap range. You can also add a price change condition over a number of days, and RSI if needed.</li>
               <li style={{ marginBottom: 6 }}><b>Run</b>: press <i>Run</i> to fetch and display matching stocks.</li>
               <li style={{ marginBottom: 6 }}><b>Sort</b>: use “Sort By” and “Sort Direction” to reorder results (market cap, price, price change, or alphabetical).</li>
               <li style={{ marginBottom: 6 }}><b>More</b>: results load in batches of 50. Click <i>More</i> to load the next batch.</li>
@@ -404,8 +468,7 @@ export default function Page() {
         )}
       </div>
 
-
-      {/* Filters intro */}
+      {/* Hint */}
       <div style={{ color: '#334155', marginBottom: 16 }}>
         Set filters → <b>Run</b>. Click column headers to sort. ({sorted.length} results loaded)
       </div>
@@ -483,7 +546,6 @@ export default function Page() {
             onChange={(e) => setSortDir(e.target.value as 'asc' | 'desc')}
             style={{ width: '100%' }}
           >
-            {/* Wording tuned per numeric/text semantics */}
             {sortKey === 'marketCap' || sortKey === 'price' || sortKey === 'priceChangePct' ? (
               <>
                 <option value="asc">Low → High</option>
@@ -496,6 +558,39 @@ export default function Page() {
               </>
             )}
           </select>
+        </div>
+
+        {/* Technical (RSI) */}
+        <div style={{ gridColumn: 'span 2', border: '1px solid #e2e8f0', borderRadius: 8, padding: 10 }}>
+          <div style={{ fontWeight: 600, marginBottom: 6 }}>Technical — RSI</div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+            <div>
+              <div style={{ fontSize: 12, color: '#64748b' }}>Timeframe</div>
+              <select value={rsiTimeframe} onChange={(e) => setRsiTimeframe(e.target.value as any)} style={{ width: '100%' }}>
+                <option value="daily">Daily</option>
+                <option value="1min">1 min</option>
+                <option value="5min">5 min</option>
+                <option value="15min">15 min</option>
+                <option value="30min">30 min</option>
+                <option value="1hour">1 hour</option>
+              </select>
+            </div>
+            <div>
+              <div style={{ fontSize: 12, color: '#64748b' }}>Period</div>
+              <input value={rsiPeriod} onChange={(e) => setRsiPeriod(e.target.value)} inputMode="numeric" style={{ width: '100%' }} />
+            </div>
+            <div>
+              <div style={{ fontSize: 12, color: '#64748b' }}>Condition</div>
+              <select value={rsiOp} onChange={(e) => setRsiOp(e.target.value as any)} style={{ width: '100%' }}>
+                <option value="lte">RSI ≤</option>
+                <option value="gte">RSI ≥</option>
+              </select>
+            </div>
+            <div>
+              <div style={{ fontSize: 12, color: '#64748b' }}>Threshold</div>
+              <input value={rsiThreshold} onChange={(e) => setRsiThreshold(e.target.value)} inputMode="decimal" style={{ width: '100%' }} />
+            </div>
+          </div>
         </div>
       </div>
 
@@ -511,6 +606,10 @@ export default function Page() {
             setMktMax('');
             setPriceChangePctMin('');
             setPriceChangeDays('');
+            setRsiTimeframe('daily');
+            setRsiPeriod('14');
+            setRsiOp('lte');
+            setRsiThreshold('');
           }}
           style={{ padding: '8px 14px' }}
         >
@@ -525,7 +624,7 @@ export default function Page() {
           <input
             value={ruleName}
             onChange={(e) => setRuleName(e.target.value)}
-            placeholder="Rule name (e.g., Large Caps up ≥5% / 20d)"
+            placeholder="Rule name (e.g., Large Caps up ≥5% / 20d + RSI≤30)"
             style={{ flex: '1 1 320px', padding: 8, border: '1px solid #cbd5e1', borderRadius: 8 }}
           />
           <button onClick={saveCurrentRule} disabled={saving} style={{ padding: '8px 14px' }}>
@@ -620,6 +719,7 @@ export default function Page() {
                   {c.label} {sortKey === c.key ? (sortDir === 'asc' ? '▲' : '▼') : ''}
                 </th>
               ))}
+              <th style={{ padding: 10, textAlign: 'right' }}>RSI</th>
               <th style={{ padding: 10, textAlign: 'right' }}>Volume</th>
               <th style={{ padding: 10 }}>Explain</th>
             </tr>
@@ -634,6 +734,11 @@ export default function Page() {
               const priceCell = priceChangeDays
                 ? `${formatUsd(r.price)} (${formatPct(pct)})`
                 : formatUsd(r.price);
+              const rsiColor =
+                typeof r.rsi === 'number'
+                  ? (r.rsi <= 30 ? '#2563eb' : r.rsi >= 70 ? '#ef4444' : undefined)
+                  : undefined;
+
               return (
                 <tr key={r.symbol} style={{ borderBottom: '1px solid #f1f5f9' }}>
                   <td style={{ padding: 10 }}>{r.symbol}</td>
@@ -641,6 +746,9 @@ export default function Page() {
                   <td style={{ padding: 10, textAlign: 'right', color }}>{priceCell}</td>
                   <td style={{ padding: 10, textAlign: 'right' }}>${formatInt(r.marketCap)}</td>
                   <td style={{ padding: 10 }}>{r.sector ?? '—'}</td>
+                  <td style={{ padding: 10, textAlign: 'right', color: rsiColor }}>
+                    {typeof r.rsi === 'number' ? r.rsi.toFixed(2) : '—'}
+                  </td>
                   <td style={{ padding: 10, textAlign: 'right' }}>{formatInt(r.volume)}</td>
                   <td style={{ padding: 10 }}>
                     {Array.isArray(r.explain) ? (
@@ -654,7 +762,7 @@ export default function Page() {
             })}
             {!loading && pageRows.length === 0 && !err && (
               <tr>
-                <td colSpan={7} style={{ padding: 16, color: '#6b7280' }}>
+                <td colSpan={8} style={{ padding: 16, color: '#6b7280' }}>
                   No results. Adjust filters and press <b>Run</b>.
                 </td>
               </tr>
