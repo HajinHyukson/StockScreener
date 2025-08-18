@@ -361,6 +361,12 @@ export default function Page() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
         <h1 style={{ fontSize: 28, fontWeight: 700 }}>Stock Screener</h1>
         <div style={{ color: '#64748b' }}>{today}</div>
+        <p style={{ marginTop: 8, marginBottom: 16, color: '#334155' }}>
+          This screener makes it easier to sort through many stocks and focus only on the ones that interest you.
+          You can filter by things like exchange, sector, company size, or how the price has been moving.
+          Once you find a set of conditions you like, save it as a rule so you can quickly check those stocks again later.
+        </p>
+
       </div>
 
       {/* Filters intro */}
