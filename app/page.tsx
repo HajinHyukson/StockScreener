@@ -181,6 +181,7 @@ export default function Page() {
   const [rules, setRules] = useState<SavedRule[]>([]);
   const [loadingRules, setLoadingRules] = useState(false);
   const [rulesError, setRulesError] = useState<string | null>(null);
+  const [autoRunAfterApply, setAutoRunAfterApply] = useState(false);
 
   async function run() {
     setLoading(true); setErr(null); setPage(1);
@@ -313,7 +314,9 @@ export default function Page() {
       setVolChangeDays
     });
 
-    await run();
+    if (autoRunAfterApply) {
+      await run();
+    }
   }
 
   useEffect(() => {
