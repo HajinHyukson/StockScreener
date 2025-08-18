@@ -1,9 +1,7 @@
 import { NextResponse } from 'next/server';
 
-// Force Node runtime for process.env and stable fetch behavior
 export const runtime = 'nodejs';
 
-// Small helper to format YYYY-MM-DD (UTC)
 function toYMD(d: Date) {
   const y = d.getUTCFullYear();
   const m = String(d.getUTCMonth() + 1).padStart(2, '0');
@@ -24,45 +22,40 @@ export async function GET(req: Request) {
 
   // Base screener inputs
   const exchange = searchParams.get('exchange') ?? 'NASDAQ';
-  const limit = String(searchParams.get('limit') ?? '50');
+  const limitStr = String(searchParams.get('limit') ?? '50');
 
   const sector = searchParams.get('sector') || '';
   const mktMin = searchParams.get('marketCapMoreThan') || '';
   const mktMax = searchParams.get('marketCapLowerThan') || '';
 
-  // New change filters
+  // Change filters / display
   const priceChangePctMin = Number(searchParams.get('priceChangePctMin') ?? '');
-  const priceChangeDays = Number(searchParams.get('priceChangeDays') ?? '');
-  const volChangePctMin = Number(searchParams.get('volChangePctMin') ?? '');
-  const volChangeDays = Number(searchParams.get('volChangeDays') ?? '');
+  const priceChangeDays   = Number(searchParams.get('priceChangeDays') ?? '');
+  const volChangePctMin   = Number(searchParams.get('volChangePctMin') ?? '');
+  const volChangeDays     = Number(searchParams.get('volChangeDays') ?? '');
 
-  // Build upstream query for the base screener (include only provided params)
-  const q = new URLSearchParams({
+  const wantsPriceFilter = Number.isFinite(priceChangePctMin) && priceChangeDays > 0;
+  const wantsVolFilter   = Number.isFinite(volChangePctMin) && volChangeDays > 0;
+  const wantsPctDisplay  = priceChangeDays > 0; // even if not filtering, we’ll compute % for display
+
+  // Build upstream query
+  const qs = new URLSearchParams({
     exchange,
-    limit,
+    limit: limitStr,
     ...(sector ? { sector } : {}),
     ...(mktMin ? { marketCapMoreThan: mktMin } : {}),
     ...(mktMax ? { marketCapLowerThan: mktMax } : {}),
     apikey: apiKey
   });
-
-  const upstream = `https://financialmodelingprep.com/api/v3/stock-screener?${q.toString()}`;
+  const upstream = `https://financialmodelingprep.com/api/v3/stock-screener?${qs.toString()}`;
 
   try {
     const r = await fetch(upstream, { next: { revalidate: 60 } });
-    if (!r.ok) {
-      return NextResponse.json(
-        { error: `Upstream ${r.status}`, hint: 'Try lowering limit or relaxing filters', url: upstream },
-        { status: 502 }
-      );
-    }
+    if (!r.ok) return NextResponse.json({ error: `Upstream ${r.status}`, url: upstream }, { status: 502 });
 
     const data = await r.json();
-    if (!Array.isArray(data)) {
-      return NextResponse.json({ error: 'Unexpected response from FMP', raw: data }, { status: 500 });
-    }
+    if (!Array.isArray(data)) return NextResponse.json({ error: 'Unexpected response' }, { status: 500 });
 
-    // Keep only fields you display, plus symbol
     let rows: Array<{
       symbol: string;
       companyName?: string;
@@ -70,6 +63,7 @@ export async function GET(req: Request) {
       marketCap?: number;
       sector?: string;
       volume?: number;
+      priceChangePct?: number; // NEW: attach N-day % change for display
     }> = data.map((d: any) => ({
       symbol: d.symbol,
       companyName: d.companyName,
@@ -79,25 +73,18 @@ export async function GET(req: Request) {
       volume: d.volume
     }));
 
-    const wantsPriceChange = Number.isFinite(priceChangePctMin) && Number(priceChangeDays) > 0;
-    const wantsVolChange = Number.isFinite(volChangePctMin) && Number(volChangeDays) > 0;
-
-    if (wantsPriceChange || wantsVolChange) {
-      // Guardrail: keep symbol count modest to respect free tiers
-      const hardCap = Math.min(Number(limit || 50), 25);
+    // If any change logic needed, fetch historical once per symbol (cap symbols to protect free tier)
+    if (wantsPriceFilter || wantsVolFilter || wantsPctDisplay) {
+      const hardCap = Math.min(Number(limitStr || 50), 25); // keep it modest
       rows = rows.slice(0, hardCap);
 
-      // Compute date range N days back (UTC)
       const now = new Date();
-      const fromD = new Date(now);
-      // Use the larger of the two windows to minimize calls if both filters are set
-      const backDays = Math.max(priceChangeDays || 0, volChangeDays || 0);
-      fromD.setUTCDate(now.getUTCDate() - backDays);
+      const back = Math.max(priceChangeDays || 0, volChangeDays || 0);
+      const fromD = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+      fromD.setUTCDate(fromD.getUTCDate() - Math.max(back, 1));
       const from = toYMD(fromD);
-      const to = toYMD(now); // inclusive range; FMP returns latest as first element typically
+      const to = toYMD(now);
 
-      // For each symbol, fetch historical to compute changes.
-      // NOTE: This can be many calls; we kept rows to <= 25 above.
       const filtered: typeof rows = [];
       for (const row of rows) {
         try {
@@ -107,37 +94,34 @@ export async function GET(req: Request) {
           const hr = await fetch(histURL, { next: { revalidate: 60 } });
           if (!hr.ok) continue;
           const hj = await hr.json();
-
           const series: Array<{ date: string; close: number; volume: number }> =
-            hj?.historical && Array.isArray(hj.historical) ? hj.historical : [];
-
+            Array.isArray(hj?.historical) ? hj.historical : [];
           if (series.length === 0) continue;
 
-          // FMP historical usually ordered newest -> oldest
           const latest = series[0];
-          // Find a point approximately N days back (could be market-closed days)
-          const past = series.find((d) => d.date <= from) ?? series.at(-1);
-
+          // pick closest record at/just before "from"
+          const past = series.find(d => d.date <= from) ?? series.at(-1);
           if (!past) continue;
 
-          let pass = true;
+          // Compute % changes (if applicable)
+          const pricePct = priceChangeDays > 0 && past.close > 0
+            ? ((latest.close - past.close) / past.close) * 100
+            : undefined;
+          const volPct = volChangeDays > 0 && past.volume > 0
+            ? ((latest.volume - past.volume) / past.volume) * 100
+            : undefined;
 
-          if (wantsPriceChange) {
-            const priceDeltaPct = past.close > 0 ? ((latest.close - past.close) / past.close) * 100 : 0;
-            if (priceDeltaPct < priceChangePctMin) pass = false;
+          let ok = true;
+          if (wantsPriceFilter && (pricePct ?? -Infinity) < priceChangePctMin) ok = false;
+          if (ok && wantsVolFilter && (volPct ?? -Infinity) < volChangePctMin) ok = false;
+
+          if (ok) {
+            filtered.push({ ...row, priceChangePct: pricePct });
           }
-
-          if (pass && wantsVolChange) {
-            const volDeltaPct = past.volume > 0 ? ((latest.volume - past.volume) / past.volume) * 100 : 0;
-            if (volDeltaPct < volChangePctMin) pass = false;
-          }
-
-          if (pass) filtered.push(row);
         } catch {
-          // Ignore symbol on any error
+          // skip symbol on error
         }
       }
-
       rows = filtered;
     }
 
