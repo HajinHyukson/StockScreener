@@ -55,7 +55,7 @@ function formatKST(iso?: string) {
   });
 }
 
-/** Market cap options builder */
+/** Market cap options builder (for min/max dropdowns) */
 function marketCapOptions(): { label: string; value: string }[] {
   const opts: { label: string; value: string }[] = [{ label: 'Any', value: '' }];
   // 500M
@@ -74,11 +74,16 @@ function marketCapOptions(): { label: string; value: string }[] {
 function buildAstFromFilters(opts: {
   exchange: string;
   sector: string;
-  mktMin: string;
-  mktMax: string;
   priceChangePctMin: string;
   priceChangeDays: string;
-  // RSI
+
+  // Fundamental (optional)
+  fundamentalSel: '' | 'marketCap';
+  mktMin: string;
+  mktMax: string;
+
+  // Technical (optional)
+  technicalSel: '' | 'rsi';
   rsiTimeframe: string;
   rsiPeriod: string;
   rsiOp: string;
@@ -86,20 +91,10 @@ function buildAstFromFilters(opts: {
 }): RuleAST {
   const children: RuleAST[] = [];
 
-  if (opts.exchange) {
-    children.push({ type: 'condition', id: 'base.exchange', params: { value: opts.exchange } });
-  }
-  if (opts.sector) {
-    children.push({ type: 'condition', id: 'base.sector', params: { value: opts.sector } });
-  }
-  if (opts.mktMin) {
-    const v = Number(opts.mktMin);
-    if (Number.isFinite(v)) children.push({ type: 'condition', id: 'base.marketCapMin', params: { value: v } });
-  }
-  if (opts.mktMax) {
-    const v = Number(opts.mktMax);
-    if (Number.isFinite(v)) children.push({ type: 'condition', id: 'base.marketCapMax', params: { value: v } });
-  }
+  if (opts.exchange) children.push({ type: 'condition', id: 'base.exchange', params: { value: opts.exchange } });
+  if (opts.sector) children.push({ type: 'condition', id: 'base.sector', params: { value: opts.sector } });
+
+  // Price change (always visible optional)
   if (opts.priceChangePctMin && opts.priceChangeDays) {
     const pct = Number(opts.priceChangePctMin);
     const days = Number(opts.priceChangeDays);
@@ -107,18 +102,27 @@ function buildAstFromFilters(opts: {
       children.push({ type: 'condition', id: 'pv.priceChangePctN', params: { pct, days } });
     }
   }
-  // RSI condition
-  if (opts.rsiThreshold) {
+
+  // Fundamental: Market Cap (only if selected)
+  if (opts.fundamentalSel === 'marketCap') {
+    if (opts.mktMin) {
+      const v = Number(opts.mktMin);
+      if (Number.isFinite(v)) children.push({ type: 'condition', id: 'base.marketCapMin', params: { value: v } });
+    }
+    if (opts.mktMax) {
+      const v = Number(opts.mktMax);
+      if (Number.isFinite(v)) children.push({ type: 'condition', id: 'base.marketCapMax', params: { value: v } });
+    }
+  }
+
+  // Technical: RSI (only if selected)
+  if (opts.technicalSel === 'rsi' && opts.rsiThreshold) {
     const th = Number(opts.rsiThreshold);
     const period = Number(opts.rsiPeriod || '14');
     const tf = (opts.rsiTimeframe || 'daily') as any;
     const op = (opts.rsiOp || 'lte') as any;
     if (Number.isFinite(th) && Number.isFinite(period)) {
-      children.push({
-        type: 'condition',
-        id: 'ti.rsi',
-        params: { timeframe: tf, period, op, value: th }
-      });
+      children.push({ type: 'condition', id: 'ti.rsi', params: { timeframe: tf, period, op, value: th } });
     }
   }
 
@@ -132,11 +136,14 @@ function buildAstFromFilters(opts: {
 function applyAstToFilters(ast: RuleAST, set: {
   setExchange: (v: string) => void;
   setSector: (v: string) => void;
-  setMktMin: (v: string) => void;
-  setMktMax: (v: string) => void;
   setPriceChangePctMin: (v: string) => void;
   setPriceChangeDays: (v: string) => void;
-  // RSI
+
+  setFundamentalSel: (v: '' | 'marketCap') => void;
+  setMktMin: (v: string) => void;
+  setMktMax: (v: string) => void;
+
+  setTechnicalSel: (v: '' | 'rsi') => void;
   setRsiTimeframe: (v: any) => void;
   setRsiPeriod: (v: string) => void;
   setRsiOp: (v: any) => void;
@@ -153,17 +160,18 @@ function applyAstToFilters(ast: RuleAST, set: {
         case 'base.sector':
           if (typeof params.value === 'string') set.setSector(params.value);
           break;
-        case 'base.marketCapMin':
-          if (typeof params.value === 'number') set.setMktMin(String(params.value));
-          break;
-        case 'base.marketCapMax':
-          if (typeof params.value === 'number') set.setMktMax(String(params.value));
-          break;
         case 'pv.priceChangePctN':
           if (typeof params.pct === 'number') set.setPriceChangePctMin(String(params.pct));
           if (typeof params.days === 'number') set.setPriceChangeDays(String(params.days));
           break;
+        case 'base.marketCapMin':
+        case 'base.marketCapMax':
+          set.setFundamentalSel('marketCap');
+          if (id === 'base.marketCapMin' && typeof params.value === 'number') set.setMktMin(String(params.value));
+          if (id === 'base.marketCapMax' && typeof params.value === 'number') set.setMktMax(String(params.value));
+          break;
         case 'ti.rsi':
+          set.setTechnicalSel('rsi');
           if (typeof params.timeframe === 'string') set.setRsiTimeframe(params.timeframe);
           if (typeof params.period === 'number') set.setRsiPeriod(String(params.period));
           if (typeof params.op === 'string') set.setRsiOp(params.op);
@@ -191,11 +199,13 @@ function summarizeAst(ast: RuleAST) {
       const { id, params = {} } = node;
       if (id === 'base.exchange') put('Exchange', params.value);
       else if (id === 'base.sector') put('Sector', params.value);
-      else if (id === 'base.marketCapMin') put('Market Cap Min (USD)', params.value);
-      else if (id === 'base.marketCapMax') put('Market Cap Max (USD)', params.value);
       else if (id === 'pv.priceChangePctN') {
         put('Price change ≥ (%)', params.pct);
         put('Over last (days)', params.days);
+      } else if (id === 'base.marketCapMin') {
+        put('Market Cap Min (USD)', params.value);
+      } else if (id === 'base.marketCapMax') {
+        put('Market Cap Max (USD)', params.value);
       } else if (id === 'ti.rsi') {
         const tf = params.timeframe || 'daily';
         const per = params.period ?? 14;
@@ -218,14 +228,19 @@ function summarizeAst(ast: RuleAST) {
 
 /** ================= Page Component ================= */
 export default function Page() {
-  // Filters
+  // Always-visible filters
   const [exchange, setExchange] = useState('NASDAQ');
   const [sector, setSector] = useState('');
-  const [mktMin, setMktMin] = useState('10000000000'); // default $10B
-  const [mktMax, setMktMax] = useState('');
   const [priceChangePctMin, setPriceChangePctMin] = useState('');
   const [priceChangeDays, setPriceChangeDays] = useState('');
-  // RSI filters
+
+  // Fundamental group (combo box) + inputs
+  const [fundamentalSel, setFundamentalSel] = useState<'' | 'marketCap'>('');
+  const [mktMin, setMktMin] = useState('');
+  const [mktMax, setMktMax] = useState('');
+
+  // Technical group (combo box) + inputs
+  const [technicalSel, setTechnicalSel] = useState<'' | 'rsi'>('');
   const [rsiTimeframe, setRsiTimeframe] = useState<'daily' | '1min' | '5min' | '15min' | '30min' | '1hour'>('daily');
   const [rsiPeriod, setRsiPeriod] = useState('14');
   const [rsiOp, setRsiOp] = useState<'lte' | 'gte'>('lte');
@@ -238,11 +253,11 @@ export default function Page() {
   const [err, setErr] = useState<string | null>(null);
   const [hasMore, setHasMore] = useState(true);
 
-  // Sorting UI
+  // Sorting UI (visible)
   const [sortKey, setSortKey] = useState<SortKey>('marketCap');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
 
-  // Client paging (table pagination)
+  // Client pagination (table)
   const [page, setPage] = useState(1);
   const pageSize = 25;
 
@@ -285,20 +300,15 @@ export default function Page() {
       const data: Row[] = Array.isArray((json as any)?.rows) ? (json as any).rows : [];
 
       if (append) {
-        // Append only the new ones (by symbol)
         const existingSymbols = new Set(rows.map(r => r.symbol));
         const newOnes = data.filter(r => !existingSymbols.has(r.symbol));
         const combined = [...rows, ...newOnes];
         setRows(combined);
-        // Heuristic: if no growth or returned < requestedLimit => end
-        if (combined.length === rows.length || data.length < requestedLimit) {
-          setHasMore(false);
-        } else {
-          setHasMore(true);
-        }
+        if (combined.length === rows.length || data.length < requestedLimit) setHasMore(false);
+        else setHasMore(true);
       } else {
         setRows(data);
-        setHasMore(data.length >= requestedLimit); // if fewer than requested, likely end
+        setHasMore(data.length >= requestedLimit);
         setPage(1);
       }
       setServerLimit(requestedLimit);
@@ -313,9 +323,10 @@ export default function Page() {
 
   async function run() {
     const ast = buildAstFromFilters({
-      exchange, sector, mktMin, mktMax,
+      exchange, sector,
       priceChangePctMin, priceChangeDays,
-      rsiTimeframe, rsiPeriod, rsiOp, rsiThreshold
+      fundamentalSel, mktMin, mktMax,
+      technicalSel, rsiTimeframe, rsiPeriod, rsiOp, rsiThreshold
     });
     setServerLimit(50);
     await runWithAst(ast, 50, false);
@@ -323,9 +334,10 @@ export default function Page() {
 
   async function loadMore() {
     const ast = buildAstFromFilters({
-      exchange, sector, mktMin, mktMax,
+      exchange, sector,
       priceChangePctMin, priceChangeDays,
-      rsiTimeframe, rsiPeriod, rsiOp, rsiThreshold
+      fundamentalSel, mktMin, mktMax,
+      technicalSel, rsiTimeframe, rsiPeriod, rsiOp, rsiThreshold
     });
     const next = serverLimit + 50;
     await runWithAst(ast, next, true);
@@ -336,9 +348,10 @@ export default function Page() {
     setSaving(true);
     try {
       const ast = buildAstFromFilters({
-        exchange, sector, mktMin, mktMax,
+        exchange, sector,
         priceChangePctMin, priceChangeDays,
-        rsiTimeframe, rsiPeriod, rsiOp, rsiThreshold
+        fundamentalSel, mktMin, mktMax,
+        technicalSel, rsiTimeframe, rsiPeriod, rsiOp, rsiThreshold
       });
       const name = ruleName.trim() || `Rule ${new Date().toLocaleString()}`;
       const res = await fetch('/api/rules', {
@@ -378,9 +391,9 @@ export default function Page() {
   async function applyRuleAndRun(rule: SavedRule) {
     // Sync filters to show what’s being used
     applyAstToFilters(rule.ast, {
-      setExchange, setSector, setMktMin, setMktMax,
-      setPriceChangePctMin, setPriceChangeDays,
-      setRsiTimeframe, setRsiPeriod, setRsiOp, setRsiThreshold
+      setExchange, setSector, setPriceChangePctMin, setPriceChangeDays,
+      setFundamentalSel, setMktMin, setMktMax,
+      setTechnicalSel, setRsiTimeframe, setRsiPeriod, setRsiOp, setRsiThreshold
     });
     setServerLimit(50);
     await runWithAst(rule.ast, 50, false);
@@ -457,7 +470,7 @@ export default function Page() {
         {helpOpen && (
           <div id="help-panel" style={{ marginTop: 8, padding: 10, border: '1px solid #e2e8f0', borderRadius: 8, background: '#ffffff' }}>
             <ol style={{ margin: 0, paddingLeft: 18, color: '#334155' }}>
-              <li style={{ marginBottom: 6 }}><b>Set filters</b>: choose the exchange, sector, and market cap range. You can also add a price change condition over a number of days, and RSI if needed.</li>
+              <li style={{ marginBottom: 6 }}><b>Set filters</b>: choose the exchange, sector, and price change window. Use Fundamental/Technical combos to add Market Cap or RSI.</li>
               <li style={{ marginBottom: 6 }}><b>Run</b>: press <i>Run</i> to fetch and display matching stocks.</li>
               <li style={{ marginBottom: 6 }}><b>Sort</b>: use “Sort By” and “Sort Direction” to reorder results (market cap, price, price change, or alphabetical).</li>
               <li style={{ marginBottom: 6 }}><b>More</b>: results load in batches of 50. Click <i>More</i> to load the next batch.</li>
@@ -473,8 +486,8 @@ export default function Page() {
         Set filters → <b>Run</b>. Click column headers to sort. ({sorted.length} results loaded)
       </div>
 
-      {/* Filters grid */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 10 }}>
+      {/* Always-visible filters grid */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 10, marginBottom: 10 }}>
         {/* Exchange */}
         <div>
           <div style={{ fontSize: 12, color: '#64748b' }}>Exchange</div>
@@ -492,22 +505,6 @@ export default function Page() {
             <option>Consumer Cyclical</option><option>Consumer Defensive</option><option>Industrials</option>
             <option>Energy</option><option>Basic Materials</option><option>Utilities</option>
             <option>Real Estate</option><option>Communication Services</option>
-          </select>
-        </div>
-
-        {/* Market Cap Min */}
-        <div>
-          <div style={{ fontSize: 12, color: '#64748b' }}>Market Cap — Minimum</div>
-          <select value={mktMin} onChange={(e) => setMktMin(e.target.value)} style={{ width: '100%' }}>
-            {mcOpts.map(o => <option key={`min-${o.value || 'any'}`} value={o.value}>{o.label}</option>)}
-          </select>
-        </div>
-
-        {/* Market Cap Max */}
-        <div>
-          <div style={{ fontSize: 12, color: '#64748b' }}>Market Cap — Maximum</div>
-          <select value={mktMax} onChange={(e) => setMktMax(e.target.value)} style={{ width: '100%' }}>
-            {mcOpts.map(o => <option key={`max-${o.value || 'any'}`} value={o.value}>{o.label}</option>)}
           </select>
         </div>
 
@@ -560,10 +557,52 @@ export default function Page() {
           </select>
         </div>
 
-        {/* Technical (RSI) */}
-        <div style={{ gridColumn: 'span 2', border: '1px solid #e2e8f0', borderRadius: 8, padding: 10 }}>
+        {/* Fundamental combo box */}
+        <div>
+          <div style={{ fontSize: 12, color: '#64748b' }}>Fundamental</div>
+          <select value={fundamentalSel} onChange={(e) => setFundamentalSel(e.target.value as '' | 'marketCap')} style={{ width: '100%' }}>
+            <option value="">None</option>
+            <option value="marketCap">Market Cap</option>
+          </select>
+        </div>
+
+        {/* Technical combo box */}
+        <div>
+          <div style={{ fontSize: 12, color: '#64748b' }}>Technical</div>
+          <select value={technicalSel} onChange={(e) => setTechnicalSel(e.target.value as '' | 'rsi')} style={{ width: '100%' }}>
+            <option value="">None</option>
+            <option value="rsi">RSI</option>
+          </select>
+        </div>
+      </div>
+
+      {/* Conditional sections (hidden unless selected) */}
+      {/* Fundamental → Market Cap */}
+      {fundamentalSel === 'marketCap' && (
+        <div style={{ marginBottom: 10, border: '1px solid #e2e8f0', borderRadius: 10, padding: 10 }}>
+          <div style={{ fontWeight: 600, marginBottom: 6 }}>Fundamental — Market Cap</div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+            <div>
+              <div style={{ fontSize: 12, color: '#64748b' }}>Market Cap — Minimum</div>
+              <select value={mktMin} onChange={(e) => setMktMin(e.target.value)} style={{ width: '100%' }}>
+                {marketCapOptions().map(o => <option key={`min-${o.value || 'any'}`} value={o.value}>{o.label}</option>)}
+              </select>
+            </div>
+            <div>
+              <div style={{ fontSize: 12, color: '#64748b' }}>Market Cap — Maximum</div>
+              <select value={mktMax} onChange={(e) => setMktMax(e.target.value)} style={{ width: '100%' }}>
+                {marketCapOptions().map(o => <option key={`max-${o.value || 'any'}`} value={o.value}>{o.label}</option>)}
+              </select>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Technical → RSI */}
+      {technicalSel === 'rsi' && (
+        <div style={{ marginBottom: 10, border: '1px solid #e2e8f0', borderRadius: 10, padding: 10 }}>
           <div style={{ fontWeight: 600, marginBottom: 6 }}>Technical — RSI</div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 10 }}>
             <div>
               <div style={{ fontSize: 12, color: '#64748b' }}>Timeframe</div>
               <select value={rsiTimeframe} onChange={(e) => setRsiTimeframe(e.target.value as any)} style={{ width: '100%' }}>
@@ -592,7 +631,7 @@ export default function Page() {
             </div>
           </div>
         </div>
-      </div>
+      )}
 
       {/* Actions */}
       <div style={{ marginTop: 12, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
@@ -602,10 +641,12 @@ export default function Page() {
         <button
           onClick={() => {
             setSector('');
-            setMktMin('');
-            setMktMax('');
             setPriceChangePctMin('');
             setPriceChangeDays('');
+            setFundamentalSel('');
+            setMktMin('');
+            setMktMax('');
+            setTechnicalSel('');
             setRsiTimeframe('daily');
             setRsiPeriod('14');
             setRsiOp('lte');
