@@ -41,6 +41,11 @@ function formatPct(n?: number) {
   const sign = n > 0 ? '+' : n < 0 ? '' : '';
   return `${sign}${n.toFixed(2)}%`;
 }
+function formatKST(iso?: string) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  return d.toLocaleString('en-US', { timeZone: 'Asia/Seoul', year: 'numeric', month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+}
 
 /** Build AST (UI → AST) */
 function buildAstFromFilters(opts: {
@@ -173,6 +178,8 @@ export default function Page() {
   const [mktMax, setMktMax] = useState('');
   const [priceChangePctMin, setPriceChangePctMin] = useState('');
   const [priceChangeDays, setPriceChangeDays] = useState('');
+  const [helpOpen, setHelpOpen] = useState(false);
+  const [asOf, setAsOf] = useState<string | null>(null);
 
   // Data & server pagination
   const [serverLimit, setServerLimit] = useState(50); // hidden default = 50
@@ -218,6 +225,9 @@ export default function Page() {
         const detail = (json as any)?.detail ? ` — ${(json as any).detail}` : '';
         throw new Error(msg + detail);
       }
+      // Capture data timestamp from backend if provided; fallback to "now"
+      setAsOf((json as any)?.asOf || (json as any)?.timestamp || new Date().toISOString());
+
       const data: Row[] = Array.isArray((json as any)?.rows) ? (json as any).rows : [];
 
       if (append) {
@@ -358,16 +368,42 @@ export default function Page() {
   /** ================= UI ================= */
   return (
     <main style={{ maxWidth: 1150, margin: '40px auto', padding: 16 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-        <h1 style={{ fontSize: 28, fontWeight: 700 }}>Stock Screener</h1>
-        <div style={{ color: '#64748b' }}>{today}</div>
-        <p style={{ marginTop: 8, marginBottom: 16, color: '#334155' }}>
-          This screener makes it easier to sort through many stocks and focus only on the ones that interest you.
-          You can filter by things like exchange, sector, company size, or how the price has been moving.
-          Once you find a set of conditions you like, save it as a rule so you can quickly check those stocks again later.
-        </p>
-
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 12, flexWrap: 'wrap' }}>
+        <h1 style={{ fontSize: 28, fontWeight: 700, marginRight: 8 }}>Stock Screener</h1>
+        <div style={{ marginLeft: 'auto', textAlign: 'right', color: '#64748b' }}>
+          <div>{today}</div>
+          <div style={{ fontSize: 12 }}>Data as of: {formatKST(asOf ?? undefined)} (KST)</div>
+        </div>
       </div>
+      <p style={{ marginTop: 8, marginBottom: 8, color: '#334155' }}>
+        This screener makes it easier to sort through many stocks and focus only on the ones that interest you.
+        You can filter by things like exchange, sector, company size, or how the price has been moving.
+        Once you find a set of conditions you like, save it as a rule so you can quickly check those stocks again later.
+      </p>
+
+      <div style={{ marginBottom: 10 }}>
+        <button
+          onClick={() => setHelpOpen(v => !v)}
+          style={{ padding: '6px 10px', border: '1px solid #cbd5e1', borderRadius: 6, background: '#f8fafc' }}
+          aria-expanded={helpOpen}
+          aria-controls="help-panel"
+        >
+          {helpOpen ? 'Hide help' : 'How to use this screener'}
+        </button>
+        {helpOpen && (
+          <div id="help-panel" style={{ marginTop: 8, padding: 10, border: '1px solid #e2e8f0', borderRadius: 8, background: '#ffffff' }}>
+            <ol style={{ margin: 0, paddingLeft: 18, color: '#334155' }}>
+              <li style={{ marginBottom: 6 }}><b>Set filters</b>: choose the exchange, sector, and market cap range. You can also add a price change condition over a number of days.</li>
+              <li style={{ marginBottom: 6 }}><b>Run</b>: press <i>Run</i> to fetch and display matching stocks.</li>
+              <li style={{ marginBottom: 6 }}><b>Sort</b>: use “Sort By” and “Sort Direction” to reorder results (market cap, price, price change, or alphabetical).</li>
+              <li style={{ marginBottom: 6 }}><b>More</b>: results load in batches of 50. Click <i>More</i> to load the next batch.</li>
+              <li style={{ marginBottom: 6 }}><b>Save rules</b>: name your current filters to reuse them later; click a rule’s name to run it again. Use <i>View</i> for details or <i>Delete</i> to remove.</li>
+              <li><b>Explain</b>: when available, the <i>Explain</i> button shows why a stock matched your conditions.</li>
+            </ol>
+          </div>
+        )}
+      </div>
+
 
       {/* Filters intro */}
       <div style={{ color: '#334155', marginBottom: 16 }}>
