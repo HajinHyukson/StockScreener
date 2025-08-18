@@ -1,11 +1,10 @@
 'use client';
 import { FilterModule } from '@/lib/filterTypes';
+import type { RuleAST } from '@/lib/types';
 
 function marketCapOptions(): { label: string; value: string }[] {
   const opts: { label: string; value: string }[] = [{ label: 'Any', value: '' }];
-  // Minimum option: $500M
   opts.push({ label: '$500M', value: String(500_000_000) });
-  // Then $500B steps up to $5T
   for (let v = 500_000_000_000; v <= 5_000_000_000_000; v += 500_000_000_000) {
     const trillions = v / 1_000_000_000_000;
     const billions = v / 1_000_000_000;
@@ -56,8 +55,8 @@ export const marketCapFilter: FilterModule = {
     );
   },
 
-  toAST: (v) => {
-    const out = [];
+  toAST: (v): RuleAST[] => {
+    const out: RuleAST[] = [];
     if (v?.min) {
       const n = Number(v.min);
       if (Number.isFinite(n)) out.push({ type: 'condition', id: 'base.marketCapMin', params: { value: n } });
@@ -69,7 +68,7 @@ export const marketCapFilter: FilterModule = {
     return out;
   },
 
-  fromAST: (ast) => {
+  fromAST: (ast: RuleAST) => {
     if (ast.type !== 'condition') return undefined;
     if (ast.id === 'base.marketCapMin') return { min: String(ast.params?.value ?? '') };
     if (ast.id === 'base.marketCapMax') return { max: String(ast.params?.value ?? '') };

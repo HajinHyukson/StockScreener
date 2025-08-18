@@ -1,5 +1,6 @@
 'use client';
 import { FilterModule } from '@/lib/filterTypes';
+import type { RuleAST } from '@/lib/types';
 
 export const priceChangeFilter: FilterModule = {
   id: 'pv.priceChangePctN',
@@ -29,7 +30,7 @@ export const priceChangeFilter: FilterModule = {
     </div>
   ),
 
-  toAST: (v) => {
+  toAST: (v): RuleAST[] => {
     const pct = Number(v?.pct);
     const days = Number(v?.days);
     if (Number.isFinite(pct) && Number.isFinite(days) && days > 0) {
@@ -38,7 +39,7 @@ export const priceChangeFilter: FilterModule = {
     return [];
   },
 
-  fromAST: (ast) =>
+  fromAST: (ast: RuleAST) =>
     ast.type === 'condition' && ast.id === 'pv.priceChangePctN'
       ? { pct: String(ast.params?.pct ?? ''), days: String(ast.params?.days ?? '') }
       : undefined,

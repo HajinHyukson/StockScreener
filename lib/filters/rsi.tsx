@@ -1,5 +1,6 @@
 'use client';
 import { FilterModule } from '@/lib/filterTypes';
+import type { RuleAST } from '@/lib/types';
 
 export const rsiFilter: FilterModule = {
   id: 'ti.rsi',
@@ -55,7 +56,7 @@ export const rsiFilter: FilterModule = {
     </div>
   ),
 
-  toAST: (v) => {
+  toAST: (v): RuleAST[] => {
     const th = Number(v?.value);
     const period = Number(v?.period ?? 14);
     const tf = v?.timeframe ?? 'daily';
@@ -66,7 +67,7 @@ export const rsiFilter: FilterModule = {
     return [];
   },
 
-  fromAST: (ast) =>
+  fromAST: (ast: RuleAST) =>
     ast.type === 'condition' && ast.id === 'ti.rsi'
       ? {
           timeframe: ast.params?.timeframe ?? 'daily',
