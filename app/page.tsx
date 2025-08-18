@@ -1,4 +1,4 @@
-'use client';
+ 'use client';
 import { useEffect, useMemo, useState } from 'react';
 
 /** ----------------- Types ----------------- */
@@ -95,12 +95,58 @@ function buildAstFromFilters(opts: {
     }
   }
 
-  // If nothing selected, create a trivial AND with just exchange (or an empty condition)
   if (children.length === 0) {
     return { type: 'condition', id: 'base.exchange', params: { value: opts.exchange || 'NASDAQ' } };
   }
-  // If only one condition, return it directly; else AND them
   return children.length === 1 ? children[0] : { type: 'AND', children };
+}
+
+/** Merge a Rule AST back into the current filter UI state */
+function applyAstToFilters(ast: RuleAST, set: {
+  setExchange: (v: string) => void;
+  setSector: (v: string) => void;
+  setMktMin: (v: string) => void;
+  setMktMax: (v: string) => void;
+  setPriceChangePctMin: (v: string) => void;
+  setPriceChangeDays: (v: string) => void;
+  setVolChangePctMin: (v: string) => void;
+  setVolChangeDays: (v: string) => void;
+}) {
+  function walk(node: RuleAST) {
+    if (!node) return;
+    if (node.type === 'condition') {
+      const id = node.id;
+      const p = node.params || {};
+      switch (id) {
+        case 'base.exchange':
+          if (typeof p.value === 'string') set.setExchange(p.value);
+          break;
+        case 'base.sector':
+          if (typeof p.value === 'string') set.setSector(p.value);
+          break;
+        case 'base.marketCapMin':
+          if (typeof p.value === 'number') set.setMktMin(String(p.value));
+          break;
+        case 'base.marketCapMax':
+          if (typeof p.value === 'number') set.setMktMax(String(p.value));
+          break;
+        case 'pv.priceChangePctN':
+          if (typeof p.pct === 'number')  set.setPriceChangePctMin(String(p.pct));
+          if (typeof p.days === 'number') set.setPriceChangeDays(String(p.days));
+          break;
+        case 'pv.volumeChangePctN':
+          if (typeof p.pct === 'number')  set.setVolChangePctMin(String(p.pct));
+          if (typeof p.days === 'number') set.setVolChangeDays(String(p.days));
+          break;
+        // extend with new condition IDs as you add them
+      }
+      return;
+    }
+    if ((node.type === 'AND' || node.type === 'OR' || node.type === 'NOT') && Array.isArray((node as any).children)) {
+      (node as any).children.forEach(walk);
+    }
+  }
+  walk(ast);
 }
 
 /** ----------------- Page ----------------- */
@@ -210,7 +256,6 @@ export default function Page() {
       const json = await res.json();
       if (!res.ok) throw new Error(json?.error || `HTTP ${res.status}`);
       setRuleName('');
-      // Refresh list
       await loadRules();
     } catch (e: any) {
       alert(`Save failed: ${e.message ?? e}`);
@@ -246,8 +291,32 @@ export default function Page() {
     }
   }
 
+  async function applyRule(rule: SavedRule) {
+    // Optional reset for predictable UX
+    setSector('');
+    setMktMin('');
+    setMktMax('');
+    setPriceChangePctMin('');
+    setPriceChangeDays('');
+    setVolChangePctMin('');
+    setVolChangeDays('');
+
+    // Merge AST → UI
+    applyAstToFilters(rule.ast, {
+      setExchange,
+      setSector,
+      setMktMin,
+      setMktMax,
+      setPriceChangePctMin,
+      setPriceChangeDays,
+      setVolChangePctMin,
+      setVolChangeDays
+    });
+
+    await run();
+  }
+
   useEffect(() => {
-    // Load on first mount
     loadRules();
   }, []);
 
@@ -385,13 +454,19 @@ export default function Page() {
                       View
                     </button>
                     <button
+                      onClick={() => applyRule(r)}
+                      title="Apply rule to filters and run"
+                      style={{ padding: '6px 10px' }}
+                    >
+                      Apply
+                    </button>
+                    <button
                       onClick={() => deleteRule(r.id)}
                       title="Delete rule"
                       style={{ padding: '6px 10px' }}
                     >
                       Delete
                     </button>
-                    {/* (Optional) Implement "Apply" later to restore filters from AST */}
                   </td>
                 </tr>
               ))}
