@@ -1,8 +1,11 @@
 'use client';
 import { useEffect, useMemo, useState } from 'react';
-import type { RuleAST } from '@/lib/types';
 
-/** Local types (to avoid import mismatches) */
+/** ================= Types (inlined to avoid import issues) ================= */
+export type RuleAST =
+  | { type: 'condition'; id: string; params: Record<string, any> }
+  | { type: 'AND' | 'OR' | 'NOT'; children: RuleAST[] };
+
 type SavedRule = {
   id: string;
   name: string;
@@ -19,11 +22,12 @@ type Row = {
   sector?: string;
   volume?: number;
   priceChangePct?: number;
+  explain?: { id: string; pass: boolean; value?: string }[];
 };
 
 type SortKey = 'symbol' | 'companyName' | 'price' | 'marketCap' | 'sector' | 'volume' | 'priceChangePct';
 
-/** ---------- Format helpers ---------- */
+/** ================= Format helpers ================= */
 function formatInt(n?: number) {
   if (typeof n !== 'number' || !isFinite(n)) return '—';
   return n.toLocaleString('en-US');
@@ -38,7 +42,7 @@ function formatPct(n?: number) {
   return `${sign}${n.toFixed(2)}%`;
 }
 
-/** ---------- Build AST (UI → AST) ---------- */
+/** ================= Build AST (UI → AST) ================= */
 function buildAstFromFilters(opts: {
   exchange: string;
   sector: string;
@@ -86,7 +90,7 @@ function buildAstFromFilters(opts: {
   return children.length === 1 ? children[0] : { type: 'AND', children };
 }
 
-/** ---------- Apply AST (AST → UI) ---------- */
+/** ================= Apply AST (AST → UI) ================= */
 function applyAstToFilters(ast: RuleAST, set: {
   setExchange: (v: string) => void;
   setSector: (v: string) => void;
@@ -100,7 +104,7 @@ function applyAstToFilters(ast: RuleAST, set: {
   function walk(node: RuleAST) {
     if (!node) return;
     if (node.type === 'condition') {
-      const { id, params = {} as any } = node as any;
+      const { id, params = {} } = node;
       switch (id) {
         case 'base.exchange':
           if (typeof params.value === 'string') set.setExchange(params.value);
@@ -132,7 +136,7 @@ function applyAstToFilters(ast: RuleAST, set: {
   walk(ast);
 }
 
-/** ---------- Summarize AST for View ---------- */
+/** ================= Summarize AST (for “View” modal) ================= */
 function summarizeAst(ast: RuleAST) {
   const out: Record<string, string> = {};
   function put(key: string, val: any) {
@@ -141,7 +145,7 @@ function summarizeAst(ast: RuleAST) {
   function walk(node: RuleAST) {
     if (!node) return;
     if (node.type === 'condition') {
-      const { id, params = {} as any } = node as any;
+      const { id, params = {} } = node;
       if (id === 'base.exchange') put('Exchange', params.value);
       else if (id === 'base.sector') put('Sector', params.value);
       else if (id === 'base.marketCapMin') put('Market Cap Min (USD)', params.value);
@@ -163,7 +167,7 @@ function summarizeAst(ast: RuleAST) {
   return out;
 }
 
-/** =================== Page Component =================== */
+/** ================= Page Component ================= */
 export default function Page() {
   // Filters
   const [exchange, setExchange] = useState('NASDAQ');
@@ -194,9 +198,13 @@ export default function Page() {
   const [loadingRules, setLoadingRules] = useState(false);
   const [rulesError, setRulesError] = useState<string | null>(null);
 
-  // View modal
+  // View Rule modal
   const [viewOpen, setViewOpen] = useState(false);
   const [viewData, setViewData] = useState<{ name: string; fields: Record<string, string> } | null>(null);
+
+  // Explain modal (per result row)
+  const [explainOpen, setExplainOpen] = useState(false);
+  const [explainRow, setExplainRow] = useState<Row | null>(null);
 
   /** --------- Backend runner (/api/run) --------- */
   async function runWithAst(ast: RuleAST) {
@@ -207,9 +215,13 @@ export default function Page() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ast, limit: Number(limit) || 25 })
       });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const json = await res.json();
-      const data = Array.isArray(json?.rows) ? json.rows : [];
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const msg = (json as any)?.error || `HTTP ${res.status}`;
+        const detail = (json as any)?.detail ? ` — ${(json as any).detail}` : '';
+        throw new Error(msg + detail);
+      }
+      const data = Array.isArray((json as any)?.rows) ? (json as any).rows : [];
       setRows(data);
     } catch (e: any) {
       setErr(e.message ?? 'Error'); setRows([]);
@@ -272,13 +284,13 @@ export default function Page() {
   }
 
   async function applyRuleAndRun(rule: SavedRule) {
-    // sync UI
+    // Sync the visible filters first (nice UX)
     applyAstToFilters(rule.ast, {
       setExchange, setSector, setMktMin, setMktMax,
       setPriceChangePctMin, setPriceChangeDays,
       setVolChangePctMin, setVolChangeDays
     });
-    // run
+    // Then run on backend with the same AST
     await runWithAst(rule.ast);
   }
 
@@ -310,7 +322,7 @@ export default function Page() {
   const today = new Date().toLocaleDateString('en-US', { timeZone: 'Asia/Seoul', year: 'numeric', month: 'short', day: '2-digit' });
   const priceColTitle = priceChangeDays ? `Price (${priceChangeDays} days %change)` : 'Price';
 
-  /** ----------------- UI ----------------- */
+  /** ================= UI ================= */
   return (
     <main style={{ maxWidth: 1150, margin: '40px auto', padding: 16 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
@@ -318,11 +330,12 @@ export default function Page() {
         <div style={{ color: '#64748b' }}>{today}</div>
       </div>
 
-      {/* Filters */}
+      {/* Filters intro */}
       <div style={{ color: '#334155', marginBottom: 16 }}>
         Set filters → <b>Run</b>. Click column headers to sort. ({sorted.length} results)
       </div>
 
+      {/* Filters grid */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 10 }}>
         <div>
           <div style={{ fontSize: 12, color: '#64748b' }}>Exchange</div>
@@ -436,6 +449,7 @@ export default function Page() {
               {rules.map((r) => (
                 <tr key={r.id} style={{ borderBottom: '1px solid #f1f5f9' }}>
                   <td style={{ padding: 8 }}>
+                    {/* Name as hyperlink → apply + run */}
                     <a
                       href="#"
                       onClick={(e) => { e.preventDefault(); applyRuleAndRun(r); }}
@@ -501,13 +515,19 @@ export default function Page() {
                   {c.label} {sortBy === c.key ? (sortDir === 'asc' ? '▲' : '▼') : ''}
                 </th>
               ))}
+              <th style={{ padding: 10 }}>Explain</th>
             </tr>
           </thead>
           <tbody>
             {pageRows.map((r) => {
               const pct = r.priceChangePct;
-              const color = typeof pct === 'number' ? (pct > 0 ? '#ef4444' : pct < 0 ? '#2563eb' : undefined) : undefined;
-              const priceCell = priceChangeDays ? `${formatUsd(r.price)} (${formatPct(pct)})` : formatUsd(r.price);
+              const color =
+                typeof pct === 'number'
+                  ? (pct > 0 ? '#ef4444' : pct < 0 ? '#2563eb' : undefined)
+                  : undefined;
+              const priceCell = priceChangeDays
+                ? `${formatUsd(r.price)} (${formatPct(pct)})`
+                : formatUsd(r.price);
               return (
                 <tr key={r.symbol} style={{ borderBottom: '1px solid #f1f5f9' }}>
                   <td style={{ padding: 10 }}>{r.symbol}</td>
@@ -516,12 +536,19 @@ export default function Page() {
                   <td style={{ padding: 10, textAlign: 'right' }}>${formatInt(r.marketCap)}</td>
                   <td style={{ padding: 10 }}>{r.sector ?? '—'}</td>
                   <td style={{ padding: 10, textAlign: 'right' }}>{formatInt(r.volume)}</td>
+                  <td style={{ padding: 10 }}>
+                    {Array.isArray(r.explain) ? (
+                      <button onClick={() => { setExplainRow(r); setExplainOpen(true); }}>Explain</button>
+                    ) : (
+                      <span style={{ color: '#94a3b8' }}>—</span>
+                    )}
+                  </td>
                 </tr>
               );
             })}
             {!loading && pageRows.length === 0 && !err && (
               <tr>
-                <td colSpan={6} style={{ padding: 16, color: '#6b7280' }}>
+                <td colSpan={7} style={{ padding: 16, color: '#6b7280' }}>
                   No results. Adjust filters and press <b>Run</b>.
                 </td>
               </tr>
@@ -537,7 +564,7 @@ export default function Page() {
         <button onClick={() => setPage(p => Math.min(totalPages, p + 1))} disabled={page >= totalPages}>Next</button>
       </div>
 
-      {/* View Modal */}
+      {/* View Rule Modal */}
       {viewOpen && viewData && (
         <div
           role="dialog"
@@ -568,6 +595,55 @@ export default function Page() {
             </div>
             <div style={{ padding: 16, borderTop: '1px solid #e5e7eb', display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
               <button onClick={() => setViewOpen(false)} style={{ padding: '8px 14px' }}>OK</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Explain Modal */}
+      {explainOpen && explainRow && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          style={{ position:'fixed', inset:0, background:'rgba(15,23,42,0.45)', display:'flex', alignItems:'center', justifyContent:'center', padding:16 }}
+          onClick={() => setExplainOpen(false)}
+        >
+          <div
+            style={{ background:'white', borderRadius:12, width:'100%', maxWidth:520, boxShadow:'0 10px 30px rgba(0,0,0,0.2)' }}
+            onClick={(e)=>e.stopPropagation()}
+          >
+            <div style={{ padding:16, borderBottom:'1px solid #e5e7eb', display:'flex', justifyContent:'space-between' }}>
+              <div style={{ fontWeight:700 }}>Why did {explainRow.symbol} match?</div>
+              <button onClick={()=>setExplainOpen(false)} style={{ padding:'6px 10px' }}>Close</button>
+            </div>
+            <div style={{ padding:16 }}>
+              {Array.isArray(explainRow.explain) ? (
+                <table style={{ width:'100%', borderCollapse:'collapse' }}>
+                  <thead>
+                    <tr style={{ textAlign:'left', borderBottom:'1px solid #e5e7eb' }}>
+                      <th style={{ padding:8 }}>Condition</th>
+                      <th style={{ padding:8 }}>Value</th>
+                      <th style={{ padding:8 }}>Pass?</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {explainRow.explain.map((e, idx) => (
+                      <tr key={idx} style={{ borderBottom:'1px solid #f1f5f9' }}>
+                        <td style={{ padding:8 }}>{e.id}</td>
+                        <td style={{ padding:8 }}>{e.value ?? '—'}</td>
+                        <td style={{ padding:8, color: e.pass ? '#16a34a' : '#b91c1c' }}>
+                          {e.pass ? 'Yes' : 'No'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              ) : (
+                <div style={{ color:'#64748b' }}>No explain data.</div>
+              )}
+            </div>
+            <div style={{ padding:16, borderTop:'1px solid #e5e7eb', display:'flex', justifyContent:'flex-end' }}>
+              <button onClick={()=>setExplainOpen(false)} style={{ padding:'8px 14px' }}>OK</button>
             </div>
           </div>
         </div>
