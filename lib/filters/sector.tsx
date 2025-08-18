@@ -28,5 +28,12 @@ export const sectorFilter: FilterModule = {
     ast.type === 'condition' && ast.id === 'base.sector' && typeof ast.params?.value === 'string'
       ? { value: ast.params.value }
       : undefined,
-  summarize: (v) => (v?.value ? { Sector: v.value } : {})
+   summarize: (v): Record<string, string> => {
+    const out: Record<string, string> = {};
+    if (v && typeof v.value === 'string' && v.value.trim() !== '') {
+      out['Sector'] = v.value;
+    }
+    return out;
+  }
+
 };

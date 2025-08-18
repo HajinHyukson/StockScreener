@@ -26,5 +26,11 @@ export const exchangeFilter: FilterModule = {
     ast.type === 'condition' && ast.id === 'base.exchange' && typeof ast.params?.value === 'string'
       ? { value: ast.params.value }
       : undefined,
-  summarize: (v) => (v?.value ? { Exchange: v.value } : {})
+   summarize: (v): Record<string, string> => {
+    const out: Record<string, string> = {};
+    if (v && typeof v.value === 'string' && v.value.trim() !== '') {
+      out['Exchange'] = v.value;
+    }
+    return out;
+  }
 };

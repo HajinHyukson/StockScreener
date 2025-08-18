@@ -41,8 +41,13 @@ export const priceChangeFilter: FilterModule = {
     ast.type === 'condition' && ast.id === 'pv.priceChangePctN'
       ? { pct: String(ast.params?.pct ?? ''), days: String(ast.params?.days ?? '') }
       : undefined,
-  summarize: (v) =>
-    Number.isFinite(Number(v?.pct)) && Number.isFinite(Number(v?.days))
-      ? { 'Price change ≥ (%)': v.pct, 'Over last (days)': v.days }
-      : {}
+   summarize: (v): Record<string, string> => {
+    const out: Record<string, string> = {};
+    const pct = Number(v?.pct);
+    const days = Number(v?.days);
+    if (Number.isFinite(pct)) out['Price change ≥ (%)'] = String(pct);
+    if (Number.isFinite(days)) out['Over last (days)'] = String(days);
+    return out;
+  }
+
 };

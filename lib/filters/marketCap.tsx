@@ -66,10 +66,11 @@ export const marketCapFilter: FilterModule = {
     return undefined;
   },
 
-  summarize: (v) => {
+   summarize: (v): Record<string, string> => {
     const s: Record<string, string> = {};
-    if (v?.min) s['Market Cap Min (USD)'] = v.min;
-    if (v?.max) s['Market Cap Max (USD)'] = v.max;
+    if (v && v.min) s['Market Cap Min (USD)'] = String(v.min);
+    if (v && v.max) s['Market Cap Max (USD)'] = String(v.max);
     return s;
   }
+
 };

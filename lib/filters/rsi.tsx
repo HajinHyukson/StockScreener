@@ -74,13 +74,15 @@ export const rsiFilter: FilterModule = {
         }
       : undefined,
 
-  summarize: (v) =>
-    Number.isFinite(Number(v?.value))
-      ? {
-          'RSI timeframe': v?.timeframe ?? 'daily',
-          'RSI period': v?.period ?? '14',
-          'RSI condition': (v?.op ?? 'lte') === 'lte' ? '≤' : '≥',
-          'RSI threshold': v?.value
-        }
-      : {}
+  summarize: (v): Record<string, string> => {
+   const out: Record<string, string> = {};
+   const thr = Number(v?.value);
+   if (!Number.isFinite(thr)) return out;
+   out['RSI timeframe'] = String(v?.timeframe ?? 'daily');
+   out['RSI period'] = String(v?.period ?? '14');
+   out['RSI condition'] = (v?.op ?? 'lte') === 'lte' ? '≤' : '≥';
+   out['RSI threshold'] = String(thr);
+   return out;
+  }
+
 };
