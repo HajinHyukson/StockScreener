@@ -277,164 +277,7 @@ export default function Page() {
     return [{ value: '', label: 'None' }, ...opts.sort((a, b) => a.label.localeCompare(b.label))];
   }, []);
 
-  /** ---- backend functions, run/loadMore, rules CRUD ---- */
-  async function runWithAst(ast: RuleAST, nextLimit?: number, append = false) {
-    setLoading(true);
-    setErr(null);
-    const requestedLimit = Number.isFinite(nextLimit as number) ? (nextLimit as number) : serverLimit;
-    try {
-      const res = await fetch('/api/run', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ast, limit: requestedLimit }),
-      });
-      const json = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error((json as any)?.error || `HTTP ${res.status}`);
-      setAsOf((json as any)?.asOf || new Date().toISOString());
-
-      const data: Row[] = Array.isArray((json as any)?.rows) ? (json as any).rows : [];
-      if (append) {
-        const existing = new Set(rows.map((r) => r.symbol));
-        const add = data.filter((r) => !existing.has(r.symbol));
-        setRows([...rows, ...add]);
-        setHasMore(data.length >= requestedLimit);
-      } else {
-        setRows(data);
-        setHasMore(data.length >= requestedLimit);
-        setPage(1);
-      }
-      setServerLimit(requestedLimit);
-    } catch (e: any) {
-      setErr(e.message ?? 'Error');
-      if (!append) setRows([]);
-      setHasMore(false);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function run() {
-    const values = { ...filterValues };
-    if (fundamentalSel !== 'base.marketCap') delete values['base.marketCap'];
-    if (technicalSel !== 'ti.rsi') delete values['ti.rsi'];
-    const ast = buildASTFromFilterValues(values);
-    setServerLimit(50);
-    await runWithAst(ast, 50, false);
-  }
-
-  async function loadMore() {
-    const values = { ...filterValues };
-    if (fundamentalSel !== 'base.marketCap') delete values['base.marketCap'];
-    if (technicalSel !== 'ti.rsi') delete values['ti.rsi'];
-    const ast = buildASTFromFilterValues(values);
-    const next = serverLimit + 50;
-    await runWithAst(ast, next, true);
-  }
-
-  async function saveCurrentRule() {
-    setSaving(true);
-    try {
-      const values = { ...filterValues };
-      if (fundamentalSel !== 'base.marketCap') delete values['base.marketCap'];
-      if (technicalSel !== 'ti.rsi') delete values['ti.rsi'];
-      const ast = buildASTFromFilterValues(values);
-      const name = ruleName.trim() || `Rule ${new Date().toLocaleString()}`;
-      const res = await fetch('/api/rules', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, ast }),
-      });
-      if (!res.ok) throw new Error('Save failed');
-      setRuleName('');
-      await loadRules();
-    } catch (e: any) {
-      alert(e.message);
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  async function loadRules() {
-    setLoadingRules(true);
-    setRulesError(null);
-    try {
-      const res = await fetch('/api/rules');
-      const json = await res.json();
-      setRules(Array.isArray(json.rules) ? json.rules : []);
-    } catch (e: any) {
-      setRulesError(e.message ?? 'Failed to load rules');
-    } finally {
-      setLoadingRules(false);
-    }
-  }
-
-  async function deleteRule(id: string) {
-    if (!confirm('Delete this rule?')) return;
-    await fetch(`/api/rules/${id}`, { method: 'DELETE' });
-    await loadRules();
-  }
-
-  async function applyRuleAndRun(rule: SavedRule) {
-    const vals = valuesFromAST(rule.ast);
-    setFilterValues(vals);
-    setFundamentalSel(vals['base.marketCap'] ? 'base.marketCap' : '');
-    setTechnicalSel(vals['ti.rsi'] ? 'ti.rsi' : '');
-    setServerLimit(50);
-    await runWithAst(rule.ast, 50, false);
-  }
-
-  function openViewModal(rule: SavedRule) {
-    const vals = valuesFromAST(rule.ast);
-    const fields = summaryFromValues(vals);
-    setViewData({ name: rule.name, fields });
-    setViewOpen(true);
-  }
-
-  useEffect(() => {
-    loadRules();
-  }, []);
-
-  const sorted = useMemo(() => {
-    const cp = [...rows];
-    cp.sort((a, b) => {
-      let av: any, bv: any;
-      switch (sortKey) {
-        case 'symbol':
-        case 'companyName':
-        case 'sector': {
-          av = String((a as any)[sortKey] ?? '').toUpperCase();
-          bv = String((b as any)[sortKey] ?? '').toUpperCase();
-          return sortDir === 'asc' ? av.localeCompare(bv) : bv.localeCompare(av);
-        }
-        case 'price':
-        case 'marketCap':
-        case 'priceChangePct': {
-          av = (a as any)[sortKey];
-          bv = (b as any)[sortKey];
-          if (typeof av !== 'number') av = -Infinity;
-          if (typeof bv !== 'number') bv = -Infinity;
-          return sortDir === 'asc' ? av - bv : bv - av;
-        }
-      }
-    });
-    return cp;
-  }, [rows, sortKey, sortDir]);
-
-  const totalPages = Math.max(1, Math.ceil(sorted.length / pageSize));
-  const pageRows = sorted.slice((page - 1) * pageSize, page * pageSize);
-  const today = new Date().toLocaleDateString('en-US', {
-    timeZone: 'Asia/Seoul',
-    year: 'numeric',
-    month: 'short',
-    day: '2-digit',
-  });
-
-  // read days from priceChange filter (for table header)
-  const priceChangeVal = filterValues['pv.priceChangePctN'];
-  const priceColTitle = priceChangeVal?.days
-    ? `Price (${priceChangeVal.days} days % change)`
-    : 'Price';
- /** ---- Backend runner ---- */
+  /** ---- Backend runner ---- */
   async function runWithAst(ast: RuleAST, nextLimit?: number, append = false) {
     setLoading(true);
     setErr(null);
@@ -573,7 +416,8 @@ export default function Page() {
         case 'price':
         case 'marketCap':
         case 'priceChangePct': {
-          av = (a as any)[sortKey]; bv = (b as any)[sortKey];
+          av = (a as any)[sortKey]; 
+          bv = (b as any)[sortKey];
           if (typeof av !== 'number') av = -Infinity;
           if (typeof bv !== 'number') bv = -Infinity;
           return sortDir === 'asc' ? av - bv : bv - av;
@@ -646,13 +490,13 @@ export default function Page() {
                 <b>Run</b>: press <i>Run</i> to fetch and display matching stocks.
               </li>
               <li style={{ marginBottom: 6 }}>
-                <b>Sort</b>: “Sort By” and “Sort Direction” to reorder results.
+                <b>Sort</b>: "Sort By" and "Sort Direction" to reorder results.
               </li>
               <li style={{ marginBottom: 6 }}>
                 <b>More</b>: results load in batches of 50. Click <i>More</i> to load the next batch.
               </li>
               <li>
-                <b>Save rules</b>: name your filters to reuse later; click a rule’s name to apply it again. Use <i>View</i> or <i>Delete</i>.
+                <b>Save rules</b>: name your filters to reuse later; click a rule's name to apply it again. Use <i>View</i> or <i>Delete</i>.
               </li>
             </ol>
           </div>
@@ -871,7 +715,8 @@ export default function Page() {
           </table>
         </div>
       </div>
-     {err && (
+
+      {err && (
         <div style={{ marginTop: 10, color: '#b91c1c', background: '#fee2e2', padding: 8, borderRadius: 8 }}>
           Error: {err}
         </div>
@@ -1079,7 +924,7 @@ export default function Page() {
             <div
               style={{
                 padding: 16,
-                borderBottom: '1px solid '#e5e7eb',
+                borderBottom: '1px solid #e5e7eb',
                 display: 'flex',
                 justifyContent: 'space-between'
               }}
