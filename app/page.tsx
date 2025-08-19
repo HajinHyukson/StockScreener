@@ -1,6 +1,6 @@
 'use client';
 import { useEffect, useMemo, useState } from 'react';
-import { allFilters } from '@/filters';
+import { allFilters } from '../filters';
 
 /** ===== Minimal shared types ===== */
 export type RuleAST =
