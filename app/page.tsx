@@ -168,6 +168,126 @@ function ComboBox({
     </div>
   );
 }
+/** -------- Multi-select ComboBox (alphabetized by caller) -------- */
+function MultiComboBox({
+  options,
+  values,
+  onChange,
+  placeholder = 'Select...',
+  width = '100%',
+}: {
+  options: ComboOption[];
+  values: string[];
+  onChange: (v: string[]) => void;
+  placeholder?: string;
+  width?: string | number;
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState<string>('');
+
+
+  const label = useMemo(() => {
+    if (!values?.length) return '';
+    const labels = values
+      .map(v => options.find(o => o.value === v)?.label)
+      .filter(Boolean) as string[];
+    return labels.join(', ');
+  }, [values, options]);
+
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return options;
+    return options.filter(o => o.label.toLowerCase().includes(q));
+  }, [options, query]);
+
+
+  const toggle = (v: string) => {
+    const set = new Set(values || []);
+    if (set.has(v)) set.delete(v);
+    else set.add(v);
+    onChange(Array.from(set));
+  };
+
+
+  return (
+    <div style={{ position: 'relative', width }}>
+      <div
+        style={{
+          display: 'flex',
+          gap: 6,
+          alignItems: 'center',
+          border: '1px solid #cbd5e1',
+          borderRadius: 6,
+          padding: '6px 8px',
+          background: '#fff',
+          cursor: 'text'
+        }}
+        onClick={() => setOpen(true)}
+      >
+        <input
+          value={open ? query : label}
+          onChange={(e) => { setQuery(e.target.value); setOpen(true); }}
+          onFocus={() => setOpen(true)}
+          placeholder={placeholder}
+          style={{ width: '100%', border: 'none', outline: 'none', background: 'transparent' }}
+        />
+        <span style={{ fontSize: 12, color: '#64748b' }}>▾</span>
+      </div>
+
+
+      {open && (
+        <div
+          style={{
+            position: 'absolute',
+            zIndex: 20,
+            top: 'calc(100% + 4px)',
+            left: 0,
+            right: 0,
+            maxHeight: 240,
+            overflowY: 'auto',
+            border: '1px solid #e2e8f0',
+            background: '#fff',
+            borderRadius: 6,
+            boxShadow: '0 8px 18px rgba(0,0,0,0.08)'
+          }}
+        >
+          {filtered.length === 0 ? (
+            <div style={{ padding: 8, color: '#94a3b8', fontSize: 14 }}>No matches</div>
+          ) : filtered.map((o) => {
+              const checked = values?.includes(o.value);
+              return (
+                <label
+                  key={o.value}
+                  onMouseDown={(e) => e.preventDefault()}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 8,
+                    padding: '8px 10px',
+                    cursor: 'pointer',
+                    background: checked ? '#f1f5f9' : undefined
+                  }}
+                  onClick={() => toggle(o.value)}
+                >
+                  <input type="checkbox" readOnly checked={checked} />
+                  <span>{o.label}</span>
+                </label>
+              );
+            })}
+        </div>
+      )}
+
+
+      {open && (
+        <div
+          onClick={() => setOpen(false)}
+          style={{ position: 'fixed', inset: 0, zIndex: 10, background: 'transparent' }}
+        />
+      )}
+    </div>
+  );
+}
 
 /** ===== AST utils ===== */
 function flattenConditions(ast: RuleAST): { id: string; params: any }[] {
@@ -229,8 +349,8 @@ export default function Page() {
   });
 
   /** Combos that control visibility of optional groups */
-  const [fundamentalSel, setFundamentalSel] = useState<'' | 'base.marketCap'>('');
-  const [technicalSel, setTechnicalSel] = useState<'' | 'ti.rsi'>('');
+  const [fundamentalSel, setFundamentalSel] = useState<string[]>([]);
+  const [technicalSel, setTechnicalSel] = useState<string[]>([]);
   const showMarketCap = fundamentalSel === 'base.marketCap' && !!filterValues['base.marketCap'];
   const showPER = !!filterValues['fa.per'];       // from perFilter.id
   const showRSI = technicalSel === 'ti.rsi' && !!filterValues['ti.rsi'];
@@ -270,18 +390,20 @@ export default function Page() {
 
   /** Dynamic, alphabetized combo options from registry */
   const fundamentalOptions: ComboOption[] = useMemo(() => {
-    const opts = allFilters
-      .filter((f) => f.group === 'fundamental')
-      .map((f) => ({ value: f.id, label: f.label }));
-    return [{ value: '', label: 'None' }, ...opts.sort((a, b) => a.label.localeCompare(b.label))];
+    return allFilters
+      .filter(f => f.group === 'fundamental')
+      .map(f => ({ value: f.id, label: f.label }))
+      .sort((a, b) => a.label.localeCompare(b.label));
   }, []);
 
+
   const technicalOptions: ComboOption[] = useMemo(() => {
-    const opts = allFilters
-      .filter((f) => f.group === 'technical')
-      .map((f) => ({ value: f.id, label: f.label }));
-    return [{ value: '', label: 'None' }, ...opts.sort((a, b) => a.label.localeCompare(b.label))];
+    return allFilters
+      .filter(f => f.group === 'technical')
+      .map(f => ({ value: f.id, label: f.label }))
+      .sort((a, b) => a.label.localeCompare(b.label));
   }, []);
+
 
   /** ---- Backend runner ---- */
   async function runWithAst(ast: RuleAST, nextLimit?: number, append = false) {
@@ -589,46 +711,62 @@ export default function Page() {
         {/* Fundamental combo (searchable, alphabetized) */}
         <div>
           <div style={{ fontSize: 12, color: '#64748b' }}>Fundamental</div>
-          <ComboBox
+          <MultiComboBox
             options={fundamentalOptions}
-            value={fundamentalSel}
-            onChange={(v) => setFundamentalSel(v as ('' | 'base.marketCap'))}
-            placeholder="Choose a fundamental filter"
+            values={fundamentalSel}
+            onChange={(vals) => setFundamentalSel(vals)}
+            placeholder="Choose fundamental filters"
           />
         </div>
+
 
         {/* Technical combo (searchable, alphabetized) */}
-        <div>
+       <div>
           <div style={{ fontSize: 12, color: '#64748b' }}>Technical</div>
-          <ComboBox
+          <MultiComboBox
             options={technicalOptions}
-            value={technicalSel}
-            onChange={(v) => setTechnicalSel(v as ('' | 'ti.rsi'))}
-            placeholder="Choose a technical filter"
+            values={technicalSel}
+            onChange={(vals) => setTechnicalSel(vals)}
+            placeholder="Choose technical filters"
           />
         </div>
-      </div>
+
 
       {/* Conditional groups */}
-      {fundamentalSel === 'base.marketCap' && (
-        <div style={{ marginBottom: 10, border: '1px solid #e2e8f0', borderRadius: 10, padding: 10 }}>
-          <div style={{ fontWeight: 600, marginBottom: 6 }}>Fundamental — Market Cap</div>
-          <MarketCapComp
-            value={filterValues['base.marketCap']}
-            onChange={(v) => setFilterValues((s) => ({ ...s, 'base.marketCap': v }))}
-          />
-        </div>
-      )}
+      {/* Render all selected fundamental filters */}
+      {fundamentalSel.map(fid => {
+        const Mod = allFilters.find(f => f.id === fid)?.Component;
+        if (!Mod) return null;
+        return (
+          <div key={fid} style={{ marginBottom: 10, border: '1px solid #e2e8f0', borderRadius: 10, padding: 10 }}>
+            <div style={{ fontWeight: 600, marginBottom: 6 }}>
+              Fundamental — {allFilters.find(f => f.id === fid)?.label}
+            </div>
+            <Mod
+              value={filterValues[fid]}
+              onChange={(v: any) => setFilterValues(s => ({ ...s, [fid]: v }))}
+            />
+          </div>
+        );
+      })}
 
-      {technicalSel === 'ti.rsi' && (
-        <div style={{ marginBottom: 10, border: '1px solid #e2e8f0', borderRadius: 10, padding: 10 }}>
-          <div style={{ fontWeight: 600, marginBottom: 6 }}>Technical — RSI</div>
-          <RSIComp
-            value={filterValues['ti.rsi']}
-            onChange={(v) => setFilterValues((s) => ({ ...s, 'ti.rsi': v }))}
-          />
-        </div>
-      )}
+
+      {/* Render all selected technical filters */}
+      {technicalSel.map(tid => {
+        const Mod = allFilters.find(f => f.id === tid)?.Component;
+        if (!Mod) return null;
+        return (
+          <div key={tid} style={{ marginBottom: 10, border: '1px solid #e2e8f0', borderRadius: 10, padding: 10 }}>
+            <div style={{ fontWeight: 600, marginBottom: 6 }}>
+              Technical — {allFilters.find(f => f.id === tid)?.label}
+            </div>
+            <Mod
+              value={filterValues[tid]}
+              onChange={(v: any) => setFilterValues(s => ({ ...s, [tid]: v }))}
+            />
+          </div>
+        );
+      })}
 
       {/* Actions */}
       <div style={{ marginTop: 12, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
