@@ -61,6 +61,15 @@ export function compileRule(ast: RuleAST): QueryPlan {
         }
         return;
       }
+      if (id === 'base.peMoreThan' && typeof params.value === 'number') {
+        emitBase({ fmpParam: 'peMoreThan', value: params.value });
+        return;
+      }
+      if (id === 'base.peLowerThan' && typeof params.value === 'number') {
+        emitBase({ fmpParam: 'peLowerThan', value: params.value });
+        return;
+      }
+
 
       // ------ Technical filters (FMP indicators) ------
       if (id === 'ti.rsi') {

@@ -1,6 +1,6 @@
 'use client';
 import { useEffect, useMemo, useState } from 'react';
-import { allFilters } from '../lib/filters';
+import { allFilters } from '/@filters';
 
 /** ===== Minimal shared types ===== */
 export type RuleAST =
@@ -24,6 +24,8 @@ type Row = {
   volume?: number;
   priceChangePct?: number;
   rsi?: number;
+  per?: number;
+  dailyChangePct?: number;
   explain?: { id: string; pass: boolean; value?: string }[];
 };
 
@@ -229,6 +231,10 @@ export default function Page() {
   /** Combos that control visibility of optional groups */
   const [fundamentalSel, setFundamentalSel] = useState<'' | 'base.marketCap'>('');
   const [technicalSel, setTechnicalSel] = useState<'' | 'ti.rsi'>('');
+  const showMarketCap = fundamentalSel === 'base.marketCap' && !!filterValues['base.marketCap'];
+  const showPER = !!filterValues['fa.per'];       // from perFilter.id
+  const showRSI = technicalSel === 'ti.rsi' && !!filterValues['ti.rsi'];
+  const showNDays = !!filterValues['pv.priceChangePctN'];  // N-day price change
 
   /** Data & pagination */
   const [serverLimit, setServerLimit] = useState(50);
@@ -668,13 +674,26 @@ export default function Page() {
         {rulesError && <div style={{ color: '#b91c1c', marginTop: 8 }}>Error: {rulesError}</div>}
         <div style={{ marginTop: 8, overflowX: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-            <thead>
+            <thead style={{ position: 'sticky', top: 0, background: '#f8fafc', zIndex: 1 }}>
               <tr style={{ textAlign: 'left', borderBottom: '1px solid #e5e7eb' }}>
-                <th style={{ padding: 8 }}>Name</th>
-                <th style={{ padding: 8 }}>Updated</th>
-                <th style={{ padding: 8 }}>Actions</th>
+                <th style={{ padding: 10 }}>Symbol</th>
+                <th style={{ padding: 10 }}>Company</th>
+                <th style={{ padding: 10 }}>Sector</th>
+                <th style={{ padding: 10, textAlign: 'right' }}>Price (Daily %)</th>
+
+
+                {showMarketCap && <th style={{ padding: 10, textAlign: 'right' }}>Market Cap</th>}
+                {showPER && <th style={{ padding: 10, textAlign: 'right' }}>PER</th>}
+                {showRSI && <th style={{ padding: 10, textAlign: 'right' }}>RSI</th>}
+                {showNDays && <th style={{ padding: 10, textAlign: 'right' }}>
+                  {priceChangeVal?.days ? `Price Δ (${priceChangeVal.days}d)` : 'Price Δ (N‑days)'}
+                </th>}
+
+
+                <th style={{ padding: 10 }}>Explain</th>
               </tr>
             </thead>
+
             <tbody>
               {rules.map((r) => (
                 <tr key={r.id} style={{ borderBottom: '1px solid #f1f5f9' }}>
@@ -774,28 +793,49 @@ export default function Page() {
                 <tr key={r.symbol} style={{ borderBottom: '1px solid #f1f5f9' }}>
                   <td style={{ padding: 10 }}>{r.symbol}</td>
                   <td style={{ padding: 10 }}>{r.companyName ?? '—'}</td>
-                  <td style={{ padding: 10, textAlign: 'right', color }}>{priceCell}</td>
-                  <td style={{ padding: 10, textAlign: 'right' }}>${formatInt(r.marketCap)}</td>
                   <td style={{ padding: 10 }}>{r.sector ?? '—'}</td>
-                  <td style={{ padding: 10, textAlign: 'right', color: rsiColor }}>
-                    {typeof r.rsi === 'number' ? r.rsi.toFixed(2) : '—'}
-                  </td>
-                  <td style={{ padding: 10, textAlign: 'right' }}>{formatInt(r.volume)}</td>
+                  {/* Price with daily % */}
+                  {(() => {
+                    const pct = r.dailyChangePct;
+                    const color = typeof pct === 'number' ? (pct > 0 ? '#ef4444' : pct < 0 ? '#2563eb' : undefined) : undefined;
+                    const pctTxt = typeof pct === 'number' ? ` (${pct.toFixed(2)}%)` : '';
+                    return (
+                      <td style={{ padding: 10, textAlign: 'right', color }}>
+                        {formatUsd(r.price)}
+                        {pctTxt}
+                      </td>
+                    );
+                  })()}
+
+
+                  {showMarketCap && <td style={{ padding: 10, textAlign: 'right' }}>${formatInt(r.marketCap)}</td>}
+                  {showPER && (
+                    <td style={{ padding: 10, textAlign: 'right' }}>
+                      {typeof r.per === 'number' ? r.per.toFixed(2) : '—'}
+                    </td>
+                  )}
+                  {showRSI && (
+                    <td style={{ padding: 10, textAlign: 'right', color: typeof r.rsi === 'number' ? (r.rsi <= 30 ? '#2563eb' : r.rsi >= 70 ? '#ef4444' : undefined) : undefined }}>
+                      {typeof r.rsi === 'number' ? r.rsi.toFixed(2) : '—'}
+                    </td>
+                  )}
+                  {showNDays && (
+                    <td style={{ padding: 10, textAlign: 'right', color: typeof r.priceChangePct === 'number' ? (r.priceChangePct > 0 ? '#ef4444' : r.priceChangePct < 0 ? '#2563eb' : undefined) : undefined }}>
+                      {typeof r.priceChangePct === 'number' ? `${r.priceChangePct.toFixed(2)}%` : '—'}
+                    </td>
+                  )}
+
+
+                  {/* Explain */}
                   <td style={{ padding: 10 }}>
                     {Array.isArray(r.explain) ? (
-                      <button
-                        onClick={() => {
-                          setExplainRow(r);
-                          setExplainOpen(true);
-                        }}
-                      >
-                        Explain
-                      </button>
+                      <button onClick={() => { setExplainRow(r); setExplainOpen(true); }}>Explain</button>
                     ) : (
                       <span style={{ color: '#94a3b8' }}>—</span>
                     )}
                   </td>
                 </tr>
+
               );
             })}
             {!loading && pageRows.length === 0 && !err && (

@@ -8,11 +8,16 @@ export type ScreenerRow = {
   symbol: string;
   companyName?: string;
   price?: number;
-  marketCap?: number;
   sector?: string;
   volume?: number;
+
+
+  marketCap?: number;
+  per?: number;   //PER Value
   priceChangePct?: number; // computed (N-day price % change)
+  dailyChangePct?: number; // N-day price change fromhistorical
   rsi?: number;            // latest RSI value when requested
+  
   explain?: { id: string; pass: boolean; value?: string }[]; // per-condition evidence
 };
 

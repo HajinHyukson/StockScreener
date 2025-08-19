@@ -85,14 +85,29 @@ export async function executePlan(
   if (!res.ok) throw new Error(`Screener ${res.status}`);
   const baseRows = (await res.json()) as any[];
 
-  const rows: (ScreenerRow & { explain?: Explain[] })[] = baseRows.map((r) => ({
+  const rows: (ScreenerRow & { explain?: Explain[] })[] = baseRows.map((r) => {
+  // FMP screener often returns `changesPercentage` as a number or string like "1.23%"
+  let dailyPct: number | undefined = undefined;
+  if (typeof r.changesPercentage === 'number') {
+    dailyPct = r.changesPercentage;
+  } else if (typeof r.changesPercentage === 'string') {
+    const m = r.changesPercentage.match(/-?\d+(\.\d+)?/);
+    if (m) dailyPct = Number(m[0]);
+  }
+
+
+  return {
     symbol: r.symbol,
     companyName: r.companyName ?? r.companyName,
     price: r.price,
-    marketCap: r.marketCap,
     sector: r.sector,
-    volume: r.volume
-  }));
+    volume: r.volume,
+    marketCap: r.marketCap,
+    per: typeof r.pe === 'number' ? r.pe : undefined,   // ← attach PER if present
+    dailyChangePct: dailyPct                            // ← attach daily change %
+  };
+});
+
 
   // Short circuit if nothing else to compute
   const needHistorical = plan.historical.length > 0;
