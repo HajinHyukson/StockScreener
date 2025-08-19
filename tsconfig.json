@@ -12,7 +12,6 @@
     "baseUrl": ".",
     "paths": {
       "@/*": ["./*"],
-      "@/filters": ["lib/filters/index"]
 }
 
 
