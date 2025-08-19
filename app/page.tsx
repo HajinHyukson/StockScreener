@@ -55,6 +55,114 @@ function formatKST(iso?: string) {
     minute: '2-digit'
   });
 }
+/** -------- Searchable ComboBox (lightweight) -------- */
+type ComboOption = { value: string; label: string };
+
+function ComboBox({
+  options,
+  value,
+  onChange,
+  placeholder = 'Select...',
+  width = '100%',
+}: {
+  options: ComboOption[];
+  value: string;
+  onChange: (v: string) => void;
+  placeholder?: string;
+  width?: string | number;
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState<string>('');
+
+  // Keep options sorted A→Z by label
+
+  const sorted = options; // assume caller passes already-sorted options
+  const activeLabel = useMemo(
+    () => sorted.find(o => o.value === value)?.label ?? '',
+    [sorted, value]
+  );
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return sorted;
+    return sorted.filter(o => o.label.toLowerCase().includes(q));
+  }, [sorted, query]);
+
+  return (
+    <div style={{ position: 'relative', width }}>
+      <div
+        style={{
+          display: 'flex',
+          gap: 6,
+          alignItems: 'center',
+          border: '1px solid #cbd5e1',
+          borderRadius: 6,
+          padding: '6px 8px',
+          background: '#fff',
+          cursor: 'text'
+        }}
+        onClick={() => { setOpen(true); }}
+      >
+        <input
+          value={open ? query : activeLabel}
+          onChange={(e) => { setQuery(e.target.value); setOpen(true); }}
+          onFocus={() => setOpen(true)}
+          placeholder={placeholder}
+          style={{ width: '100%', border: 'none', outline: 'none', background: 'transparent' }}
+        />
+        <span style={{ fontSize: 12, color: '#64748b' }}>▾</span>
+      </div>
+
+      {open && (
+        <div
+          style={{
+            position: 'absolute',
+            zIndex: 20,
+            top: 'calc(100% + 4px)',
+            left: 0,
+            right: 0,
+            maxHeight: 220,
+            overflowY: 'auto',
+            border: '1px solid #e2e8f0',
+            background: '#fff',
+            borderRadius: 6,
+            boxShadow: '0 8px 18px rgba(0,0,0,0.08)'
+          }}
+        >
+          {filtered.length === 0 ? (
+            <div style={{ padding: 8, color: '#94a3b8', fontSize: 14 }}>No matches</div>
+          ) : filtered.map((o) => (
+            <div
+              key={o.value || 'none'}
+              onMouseDown={(e) => {
+                // onMouseDown so it fires before input blur
+                e.preventDefault();
+                onChange(o.value);
+                setQuery('');
+                setOpen(false);
+              }}
+              style={{
+                padding: '8px 10px',
+                cursor: 'pointer',
+                background: o.value === value ? '#f1f5f9' : undefined
+              }}
+            >
+              {o.label}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Click-away closer */}
+      {open && (
+        <div
+          onClick={() => setOpen(false)}
+          style={{ position: 'fixed', inset: 0, zIndex: 10, background: 'transparent' }}
+        />
+      )}
+    </div>
+  );
+}
 
 /** ===== AST utils ===== */
 function flattenConditions(ast: RuleAST): { id: string; params: any }[] {
@@ -115,6 +223,22 @@ export default function Page() {
   const [filterValues, setFilterValues] = useState<Record<string, any>>({
     'base.exchange': { value: 'NASDAQ' }
   });
+// Dynamic, alphabetized combo options derived from the filter registry
+const fundamentalOptions: ComboOption[] = useMemo(() => {
+  const opts = allFilters
+    .filter(f => f.group === 'fundamental')
+    .map(f => ({ value: f.id, label: f.label }));
+  // Insert “None” at top, then alphabetical
+  return [{ value: '', label: 'None' }, ...opts.sort((a, b) => a.label.localeCompare(b.label))];
+}, []);
+
+const technicalOptions: ComboOption[] = useMemo(() => {
+  const opts = allFilters
+    .filter(f => f.group === 'technical')
+    .map(f => ({ value: f.id, label: f.label }));
+  return [{ value: '', label: 'None' }, ...opts.sort((a, b) => a.label.localeCompare(b.label))];
+}, []);
+
 
   /** Combos that control visibility of optional groups */
   const [fundamentalSel, setFundamentalSel] = useState<'' | 'base.marketCap'>('');
@@ -461,28 +585,23 @@ export default function Page() {
         {/* Fundamental combo */}
         <div>
           <div style={{ fontSize: 12, color: '#64748b' }}>Fundamental</div>
-          <select
+          <ComboBox
+            options={fundamentalOptions}
             value={fundamentalSel}
-            onChange={(e) => setFundamentalSel(e.target.value as '' | 'base.marketCap')}
-            style={{ width: '100%' }}
-          >
-            <option value="">None</option>
-            <option value="base.marketCap">Market Cap</option>
-          </select>
+            onChange={(v) => setFundamentalSel(v as ('' | 'base.marketCap'))}
+            placeholder="Choose a fundamental filter"
+          />
         </div>
 
         {/* Technical combo */}
-        <div>
-          <div style={{ fontSize: 12, color: '#64748b' }}>Technical</div>
-          <select
-            value={technicalSel}
-            onChange={(e) => setTechnicalSel(e.target.value as '' | 'ti.rsi')}
-            style={{ width: '100%' }}
-          >
-            <option value="">None</option>
-            <option value="ti.rsi">RSI</option>
-          </select>
-        </div>
+       <div>
+        <div style={{ fontSize: 12, color: '#64748b' }}>Technical</div>
+        <ComboBox
+          options={technicalOptions}
+          value={technicalSel}
+          onChange={(v) => setTechnicalSel(v as ('' | 'ti.rsi'))}
+          placeholder="Choose a technical filter"
+        />
       </div>
 
       {/* Conditional groups */}
