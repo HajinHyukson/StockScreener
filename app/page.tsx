@@ -1,8 +1,8 @@
 'use client';
 import { useEffect, useMemo, useState } from 'react';
-import { allFilters } from 'lib/filters';
+import { allFilters } from '@/filters';
 
-/** ===== Minimal shared types (local) ===== */
+/** ===== Minimal shared types ===== */
 export type RuleAST =
   | { type: 'condition'; id: string; params: Record<string, any> }
   | { type: 'AND' | 'OR' | 'NOT'; children: RuleAST[] };
@@ -22,9 +22,9 @@ type Row = {
   marketCap?: number;
   sector?: string;
   volume?: number;
-  priceChangePct?: number; // computed N-day price % change
-  rsi?: number;            // technical column (optional)
-  explain?: { id: string; pass: boolean; value?: string }[]; // explain diagnostics
+  priceChangePct?: number;
+  rsi?: number;
+  explain?: { id: string; pass: boolean; value?: string }[];
 };
 
 type SortKey = 'symbol' | 'companyName' | 'price' | 'marketCap' | 'sector' | 'priceChangePct';
@@ -52,10 +52,11 @@ function formatKST(iso?: string) {
     month: 'short',
     day: '2-digit',
     hour: '2-digit',
-    minute: '2-digit'
+    minute: '2-digit',
   });
 }
-/** -------- Searchable ComboBox (lightweight) -------- */
+
+/** -------- Searchable ComboBox (alphabetized externally via options prop) -------- */
 type ComboOption = { value: string; label: string };
 
 function ComboBox({
@@ -74,19 +75,16 @@ function ComboBox({
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState<string>('');
 
-  // Keep options sorted A→Z by label
-
-  const sorted = options; // assume caller passes already-sorted options
   const activeLabel = useMemo(
-    () => sorted.find(o => o.value === value)?.label ?? '',
-    [sorted, value]
+    () => options.find((o) => o.value === value)?.label ?? '',
+    [options, value]
   );
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return sorted;
-    return sorted.filter(o => o.label.toLowerCase().includes(q));
-  }, [sorted, query]);
+    if (!q) return options;
+    return options.filter((o) => o.label.toLowerCase().includes(q));
+  }, [options, query]);
 
   return (
     <div style={{ position: 'relative', width }}>
@@ -99,13 +97,18 @@ function ComboBox({
           borderRadius: 6,
           padding: '6px 8px',
           background: '#fff',
-          cursor: 'text'
+          cursor: 'text',
         }}
-        onClick={() => { setOpen(true); }}
+        onClick={() => {
+          setOpen(true);
+        }}
       >
         <input
           value={open ? query : activeLabel}
-          onChange={(e) => { setQuery(e.target.value); setOpen(true); }}
+          onChange={(e) => {
+            setQuery(e.target.value);
+            setOpen(true);
+          }}
           onFocus={() => setOpen(true)}
           placeholder={placeholder}
           style={{ width: '100%', border: 'none', outline: 'none', background: 'transparent' }}
@@ -126,34 +129,34 @@ function ComboBox({
             border: '1px solid #e2e8f0',
             background: '#fff',
             borderRadius: 6,
-            boxShadow: '0 8px 18px rgba(0,0,0,0.08)'
+            boxShadow: '0 8px 18px rgba(0,0,0,0.08)',
           }}
         >
           {filtered.length === 0 ? (
             <div style={{ padding: 8, color: '#94a3b8', fontSize: 14 }}>No matches</div>
-          ) : filtered.map((o) => (
-            <div
-              key={o.value || 'none'}
-              onMouseDown={(e) => {
-                // onMouseDown so it fires before input blur
-                e.preventDefault();
-                onChange(o.value);
-                setQuery('');
-                setOpen(false);
-              }}
-              style={{
-                padding: '8px 10px',
-                cursor: 'pointer',
-                background: o.value === value ? '#f1f5f9' : undefined
-              }}
-            >
-              {o.label}
-            </div>
-          ))}
+          ) : (
+            filtered.map((o) => (
+              <div
+                key={o.value || 'none'}
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  onChange(o.value);
+                  setQuery('');
+                  setOpen(false);
+                }}
+                style={{
+                  padding: '8px 10px',
+                  cursor: 'pointer',
+                  background: o.value === value ? '#f1f5f9' : undefined,
+                }}
+              >
+                {o.label}
+              </div>
+            ))
+          )}
         </div>
       )}
 
-      {/* Click-away closer */}
       {open && (
         <div
           onClick={() => setOpen(false)}
@@ -169,9 +172,8 @@ function flattenConditions(ast: RuleAST): { id: string; params: any }[] {
   const out: { id: string; params: any }[] = [];
   const walk = (n: RuleAST) => {
     if (!n) return;
-    if (n.type === 'condition') {
-      out.push({ id: n.id, params: n.params ?? {} });
-    } else if ((n.type === 'AND' || n.type === 'OR' || n.type === 'NOT') && Array.isArray((n as any).children)) {
+    if (n.type === 'condition') out.push({ id: n.id, params: n.params ?? {} });
+    else if ((n.type === 'AND' || n.type === 'OR' || n.type === 'NOT') && Array.isArray((n as any).children)) {
       (n as any).children.forEach(walk);
     }
   };
@@ -221,24 +223,8 @@ function valuesFromAST(ast: RuleAST) {
 export default function Page() {
   /** Filter state (modular by filter id) */
   const [filterValues, setFilterValues] = useState<Record<string, any>>({
-    'base.exchange': { value: 'NASDAQ' }
+    'base.exchange': { value: 'NASDAQ' },
   });
-// Dynamic, alphabetized combo options derived from the filter registry
-const fundamentalOptions: ComboOption[] = useMemo(() => {
-  const opts = allFilters
-    .filter(f => f.group === 'fundamental')
-    .map(f => ({ value: f.id, label: f.label }));
-  // Insert “None” at top, then alphabetical
-  return [{ value: '', label: 'None' }, ...opts.sort((a, b) => a.label.localeCompare(b.label))];
-}, []);
-
-const technicalOptions: ComboOption[] = useMemo(() => {
-  const opts = allFilters
-    .filter(f => f.group === 'technical')
-    .map(f => ({ value: f.id, label: f.label }));
-  return [{ value: '', label: 'None' }, ...opts.sort((a, b) => a.label.localeCompare(b.label))];
-}, []);
-
 
   /** Combos that control visibility of optional groups */
   const [fundamentalSel, setFundamentalSel] = useState<'' | 'base.marketCap'>('');
@@ -276,7 +262,179 @@ const technicalOptions: ComboOption[] = useMemo(() => {
   const [helpOpen, setHelpOpen] = useState(false);
   const [asOf, setAsOf] = useState<string | null>(null);
 
-  /** ---- Backend runner ---- */
+  /** Dynamic, alphabetized combo options from registry */
+  const fundamentalOptions: ComboOption[] = useMemo(() => {
+    const opts = allFilters
+      .filter((f) => f.group === 'fundamental')
+      .map((f) => ({ value: f.id, label: f.label }));
+    return [{ value: '', label: 'None' }, ...opts.sort((a, b) => a.label.localeCompare(b.label))];
+  }, []);
+
+  const technicalOptions: ComboOption[] = useMemo(() => {
+    const opts = allFilters
+      .filter((f) => f.group === 'technical')
+      .map((f) => ({ value: f.id, label: f.label }));
+    return [{ value: '', label: 'None' }, ...opts.sort((a, b) => a.label.localeCompare(b.label))];
+  }, []);
+
+  /** ---- backend functions, run/loadMore, rules CRUD ---- */
+  async function runWithAst(ast: RuleAST, nextLimit?: number, append = false) {
+    setLoading(true);
+    setErr(null);
+    const requestedLimit = Number.isFinite(nextLimit as number) ? (nextLimit as number) : serverLimit;
+    try {
+      const res = await fetch('/api/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ast, limit: requestedLimit }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error((json as any)?.error || `HTTP ${res.status}`);
+      setAsOf((json as any)?.asOf || new Date().toISOString());
+
+      const data: Row[] = Array.isArray((json as any)?.rows) ? (json as any).rows : [];
+      if (append) {
+        const existing = new Set(rows.map((r) => r.symbol));
+        const add = data.filter((r) => !existing.has(r.symbol));
+        setRows([...rows, ...add]);
+        setHasMore(data.length >= requestedLimit);
+      } else {
+        setRows(data);
+        setHasMore(data.length >= requestedLimit);
+        setPage(1);
+      }
+      setServerLimit(requestedLimit);
+    } catch (e: any) {
+      setErr(e.message ?? 'Error');
+      if (!append) setRows([]);
+      setHasMore(false);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function run() {
+    const values = { ...filterValues };
+    if (fundamentalSel !== 'base.marketCap') delete values['base.marketCap'];
+    if (technicalSel !== 'ti.rsi') delete values['ti.rsi'];
+    const ast = buildASTFromFilterValues(values);
+    setServerLimit(50);
+    await runWithAst(ast, 50, false);
+  }
+
+  async function loadMore() {
+    const values = { ...filterValues };
+    if (fundamentalSel !== 'base.marketCap') delete values['base.marketCap'];
+    if (technicalSel !== 'ti.rsi') delete values['ti.rsi'];
+    const ast = buildASTFromFilterValues(values);
+    const next = serverLimit + 50;
+    await runWithAst(ast, next, true);
+  }
+
+  async function saveCurrentRule() {
+    setSaving(true);
+    try {
+      const values = { ...filterValues };
+      if (fundamentalSel !== 'base.marketCap') delete values['base.marketCap'];
+      if (technicalSel !== 'ti.rsi') delete values['ti.rsi'];
+      const ast = buildASTFromFilterValues(values);
+      const name = ruleName.trim() || `Rule ${new Date().toLocaleString()}`;
+      const res = await fetch('/api/rules', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, ast }),
+      });
+      if (!res.ok) throw new Error('Save failed');
+      setRuleName('');
+      await loadRules();
+    } catch (e: any) {
+      alert(e.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function loadRules() {
+    setLoadingRules(true);
+    setRulesError(null);
+    try {
+      const res = await fetch('/api/rules');
+      const json = await res.json();
+      setRules(Array.isArray(json.rules) ? json.rules : []);
+    } catch (e: any) {
+      setRulesError(e.message ?? 'Failed to load rules');
+    } finally {
+      setLoadingRules(false);
+    }
+  }
+
+  async function deleteRule(id: string) {
+    if (!confirm('Delete this rule?')) return;
+    await fetch(`/api/rules/${id}`, { method: 'DELETE' });
+    await loadRules();
+  }
+
+  async function applyRuleAndRun(rule: SavedRule) {
+    const vals = valuesFromAST(rule.ast);
+    setFilterValues(vals);
+    setFundamentalSel(vals['base.marketCap'] ? 'base.marketCap' : '');
+    setTechnicalSel(vals['ti.rsi'] ? 'ti.rsi' : '');
+    setServerLimit(50);
+    await runWithAst(rule.ast, 50, false);
+  }
+
+  function openViewModal(rule: SavedRule) {
+    const vals = valuesFromAST(rule.ast);
+    const fields = summaryFromValues(vals);
+    setViewData({ name: rule.name, fields });
+    setViewOpen(true);
+  }
+
+  useEffect(() => {
+    loadRules();
+  }, []);
+
+  const sorted = useMemo(() => {
+    const cp = [...rows];
+    cp.sort((a, b) => {
+      let av: any, bv: any;
+      switch (sortKey) {
+        case 'symbol':
+        case 'companyName':
+        case 'sector': {
+          av = String((a as any)[sortKey] ?? '').toUpperCase();
+          bv = String((b as any)[sortKey] ?? '').toUpperCase();
+          return sortDir === 'asc' ? av.localeCompare(bv) : bv.localeCompare(av);
+        }
+        case 'price':
+        case 'marketCap':
+        case 'priceChangePct': {
+          av = (a as any)[sortKey];
+          bv = (b as any)[sortKey];
+          if (typeof av !== 'number') av = -Infinity;
+          if (typeof bv !== 'number') bv = -Infinity;
+          return sortDir === 'asc' ? av - bv : bv - av;
+        }
+      }
+    });
+    return cp;
+  }, [rows, sortKey, sortDir]);
+
+  const totalPages = Math.max(1, Math.ceil(sorted.length / pageSize));
+  const pageRows = sorted.slice((page - 1) * pageSize, page * pageSize);
+  const today = new Date().toLocaleDateString('en-US', {
+    timeZone: 'Asia/Seoul',
+    year: 'numeric',
+    month: 'short',
+    day: '2-digit',
+  });
+
+  // read days from priceChange filter (for table header)
+  const priceChangeVal = filterValues['pv.priceChangePctN'];
+  const priceColTitle = priceChangeVal?.days
+    ? `Price (${priceChangeVal.days} days % change)`
+    : 'Price';
+ /** ---- Backend runner ---- */
   async function runWithAst(ast: RuleAST, nextLimit?: number, append = false) {
     setLoading(true);
     setErr(null);
@@ -297,14 +455,11 @@ const technicalOptions: ComboOption[] = useMemo(() => {
       setAsOf((json as any)?.asOf || (json as any)?.timestamp || new Date().toISOString());
 
       const data: Row[] = Array.isArray((json as any)?.rows) ? (json as any).rows : [];
-
       if (append) {
-        const existing = new Set(rows.map((r) => r.symbol));
-        const add = data.filter((r) => !existing.has(r.symbol));
-        const combined = [...rows, ...add];
-        setRows(combined);
-        // hasMore if we still seem to get more than previous chunk
-        setHasMore(!(combined.length === rows.length || data.length < requestedLimit));
+        const existing = new Set(rows.map(r => r.symbol));
+        const add = data.filter(r => !existing.has(r.symbol));
+        setRows([...rows, ...add]);
+        setHasMore(data.length >= requestedLimit);
       } else {
         setRows(data);
         setHasMore(data.length >= requestedLimit);
@@ -402,7 +557,7 @@ const technicalOptions: ComboOption[] = useMemo(() => {
     loadRules();
   }, []);
 
-  /** ---- Sorting (client) ---- */
+  /** ---- Sorting (client-side) ---- */
   const sorted = useMemo(() => {
     const cp = [...rows];
     cp.sort((a, b) => {
@@ -431,7 +586,7 @@ const technicalOptions: ComboOption[] = useMemo(() => {
   const totalPages = Math.max(1, Math.ceil(sorted.length / pageSize));
   const pageRows = sorted.slice((page - 1) * pageSize, page * pageSize);
 
-  /** ---- Titles / dates ---- */
+  /** ---- Dates / titles ---- */
   const today = new Date().toLocaleDateString('en-US', {
     timeZone: 'Asia/Seoul',
     year: 'numeric',
@@ -439,16 +594,15 @@ const technicalOptions: ComboOption[] = useMemo(() => {
     day: '2-digit'
   });
 
-  // read days from priceChange filter (for table header)
   const priceChangeVal = filterValues['pv.priceChangePctN'];
   const priceColTitle = priceChangeVal?.days ? `Price (${priceChangeVal.days} days % change)` : 'Price';
 
-  /** ---- Prepare filter components (avoid JSX member/array access) ---- */
-  const ExchangeComp = allFilters[0].Component;
-  const SectorComp = allFilters[1].Component;
-  const PriceChangeComp = allFilters[2].Component;
-  const MarketCapComp = allFilters[3].Component; // fundamental
-  const RSIComp = allFilters[4].Component;       // technical
+  /** ---- Resolve filter components by id (stable even if registry order changes) ---- */
+  const ExchangeComp = useMemo(() => allFilters.find(f => f.id === 'base.exchange')!.Component, []);
+  const SectorComp = useMemo(() => allFilters.find(f => f.id === 'base.sector')!.Component, []);
+  const PriceChangeComp = useMemo(() => allFilters.find(f => f.id === 'pv.priceChangePctN')!.Component, []);
+  const MarketCapComp = useMemo(() => allFilters.find(f => f.id === 'base.marketCap')!.Component, []);
+  const RSIComp = useMemo(() => allFilters.find(f => f.id === 'ti.rsi')!.Component, []);
 
   /** ===== UI ===== */
   return (
@@ -582,7 +736,7 @@ const technicalOptions: ComboOption[] = useMemo(() => {
           </select>
         </div>
 
-        {/* Fundamental combo */}
+        {/* Fundamental combo (searchable, alphabetized) */}
         <div>
           <div style={{ fontSize: 12, color: '#64748b' }}>Fundamental</div>
           <ComboBox
@@ -593,15 +747,16 @@ const technicalOptions: ComboOption[] = useMemo(() => {
           />
         </div>
 
-        {/* Technical combo */}
-       <div>
-        <div style={{ fontSize: 12, color: '#64748b' }}>Technical</div>
-        <ComboBox
-          options={technicalOptions}
-          value={technicalSel}
-          onChange={(v) => setTechnicalSel(v as ('' | 'ti.rsi'))}
-          placeholder="Choose a technical filter"
-        />
+        {/* Technical combo (searchable, alphabetized) */}
+        <div>
+          <div style={{ fontSize: 12, color: '#64748b' }}>Technical</div>
+          <ComboBox
+            options={technicalOptions}
+            value={technicalSel}
+            onChange={(v) => setTechnicalSel(v as ('' | 'ti.rsi'))}
+            placeholder="Choose a technical filter"
+          />
+        </div>
       </div>
 
       {/* Conditional groups */}
@@ -716,8 +871,7 @@ const technicalOptions: ComboOption[] = useMemo(() => {
           </table>
         </div>
       </div>
-
-      {err && (
+     {err && (
         <div style={{ marginTop: 10, color: '#b91c1c', background: '#fee2e2', padding: 8, borderRadius: 8 }}>
           Error: {err}
         </div>
@@ -761,22 +915,14 @@ const technicalOptions: ComboOption[] = useMemo(() => {
               const pct = r.priceChangePct;
               const color =
                 typeof pct === 'number'
-                  ? pct > 0
-                    ? '#ef4444'
-                    : pct < 0
-                    ? '#2563eb'
-                    : undefined
+                  ? (pct > 0 ? '#ef4444' : pct < 0 ? '#2563eb' : undefined)
                   : undefined;
               const priceCell = priceChangeVal?.days
                 ? `${formatUsd(r.price)} (${formatPct(pct)})`
                 : formatUsd(r.price);
               const rsiColor =
                 typeof r.rsi === 'number'
-                  ? r.rsi <= 30
-                    ? '#2563eb'
-                    : r.rsi >= 70
-                    ? '#ef4444'
-                    : undefined
+                  ? (r.rsi <= 30 ? '#2563eb' : r.rsi >= 70 ? '#ef4444' : undefined)
                   : undefined;
 
               return (
@@ -933,7 +1079,7 @@ const technicalOptions: ComboOption[] = useMemo(() => {
             <div
               style={{
                 padding: 16,
-                borderBottom: '1px solid #e5e7eb',
+                borderBottom: '1px solid '#e5e7eb',
                 display: 'flex',
                 justifyContent: 'space-between'
               }}
