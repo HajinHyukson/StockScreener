@@ -13,9 +13,10 @@ import {
   computeVolumeChangePctNDays         // (series, days) => number | undefined
 } from './historical';
 
+/** Concurrency controls */
 const MAX_CONCURRENCY = Number(process.env.MAX_CONCURRENCY ?? 6);
 
-/** Minimal p-limit to bound upstream calls */
+/** Minimal p-limit */
 function pLimit<T extends (...args: any[]) => Promise<any>>(concurrency: number, fn: T) {
   let active = 0;
   const queue: (() => void)[] = [];
@@ -28,53 +29,79 @@ function pLimit<T extends (...args: any[]) => Promise<any>>(concurrency: number,
     new Promise<ReturnType<T>>((resolve, reject) => {
       const run = () => {
         active++;
-        fn(...args).then((r) => { next(); resolve(r as any); })
-                   .catch((e) => { next(); reject(e); });
+        fn(...args)
+          .then((r) => { next(); resolve(r as any); })
+          .catch((e) => { next(); reject(e); });
       };
       if (active < concurrency) run();
       else queue.push(run);
     });
 }
 
+/** Build /stock-screener URL from plan.base */
 function buildScreenerUrl(base: QueryPlan['base'], limit: number, apiKey: string): string {
   const params = new URLSearchParams();
-  for (const b of base) {
-    params.set(b.fmpParam, String(b.value));
-  }
+  for (const b of base) params.set(b.fmpParam, String(b.value));
   params.set('limit', String(limit));
   params.set('apikey', apiKey);
   return `https://financialmodelingprep.com/api/v3/stock-screener?${params.toString()}`;
 }
 
+/** Explain entry */
 type Explain = { id: string; pass: boolean; value?: string };
 
-function explainForSeries(series: any[], filters: HistoricalFilter[]): Explain[] {
-  const ex: Explain[] = [];
-  for (const f of filters) {
-    if (f.kind === 'priceChangePctNDays') {
-      const pct = computePriceChangePctNDays(series, f.days);
-      ex.push({ id: 'pv.priceChangePctN', pass: pct !== undefined && pct >= f.pct, value: pct?.toFixed(2) });
-    } else if (f.kind === 'volumeChangePctNDays') {
-      const pct = computeVolumeChangePctNDays(series, f.days);
-      ex.push({ id: 'pv.volumeChangePctN', pass: pct !== undefined && pct >= f.pct, value: pct?.toFixed(2) });
-    }
+/** Convert screener payload row -> ScreenerRow (robust keys) */
+function mapScreenerRow(raw: any): ScreenerRow {
+  // daily % change can be numeric or "1.23%"
+  let dailyPct: number | undefined;
+  if (typeof raw.changesPercentage === 'number') {
+    dailyPct = raw.changesPercentage;
+  } else if (typeof raw.changesPercentage === 'string') {
+    const m = raw.changesPercentage.match(/-?\d+(\.\d+)?/);
+    if (m) dailyPct = Number(m[0]);
   }
-  return ex;
+
+  // PER / P-E ratio under different keys
+  const pe =
+    typeof raw.pe === 'number' ? raw.pe :
+    typeof raw.priceEarningsRatio === 'number' ? raw.priceEarningsRatio :
+    typeof raw.peRatio === 'number' ? raw.peRatio :
+    undefined;
+
+  return {
+    symbol: raw.symbol,
+    companyName: raw.companyName ?? raw.companyName,
+    price: raw.price,
+    sector: raw.sector,
+    volume: raw.volume,
+    marketCap: raw.marketCap,
+    per: pe,
+    dailyChangePct: dailyPct,
+  };
 }
 
-function passesAll(ex: Explain[]) {
-  return ex.every(e => e.pass);
+/** Attach RSI explain + value */
+function explainRSI(
+  series: any[],
+  rsiFilters: TechnicalFilterRSI[],
+  r: ScreenerRow
+): Explain[] {
+  const ex: Explain[] = [];
+  // We compute RSI via the API (fetchRSI), not from series — series is left for price change.
+  // The caller will fill ex using fetchRSI; this helper unused for RSI; keep for future.
+  return ex;
 }
 
 /**
  * Execute the plan:
- *  1) Call FMP screener for base filters
- *  2) If historical filters exist, fetch series and compute features
- *  3) If RSI filters exist, fetch RSI and filter rows
- *  Returns the filtered/enhanced rows (with explain data)
+ *  1) /stock-screener for base filters
+ *  2) historical filters (priceChangePctNDays with op, volumeChange optional)
+ *  3) technical RSI
+ *  4) enrich PER when missing
+ *  5) apply post filters (PER gte/lte)
  */
 export async function executePlan(
-  plan: QueryPlan,
+  plan: QueryPlan & { post?: Array<{ kind: 'per'; op: 'lte' | 'gte'; value: number }> },
   limit: number,
   apiKey: string
 ): Promise<(ScreenerRow & { explain?: Explain[] })[]> {
@@ -85,137 +112,124 @@ export async function executePlan(
   if (!res.ok) throw new Error(`Screener ${res.status}`);
   const baseRows = (await res.json()) as any[];
 
-  const rows: (ScreenerRow & { explain?: Explain[] })[] = baseRows.map((r: any) => {
-  // Daily % change can be numeric or a string like "1.23%"
-  let dailyPct: number | undefined = undefined;
-  if (typeof r.changesPercentage === 'number') {
-    dailyPct = r.changesPercentage;
-  } else if (typeof r.changesPercentage === 'string') {
-    const m = r.changesPercentage.match(/-?\d+(\.\d+)?/);
-    if (m) dailyPct = Number(m[0]);
-  }
+  // Map to our row shape
+  let rows: (ScreenerRow & { explain?: Explain[]; __raw?: any })[] = baseRows.map((raw) => {
+    const r = mapScreenerRow(raw);
+    (r as any).__raw = raw; // keep for robust fallbacks (optional)
+    return r;
+  });
 
-  // PER (P/E) can appear under different keys depending on endpoint variations
-  const pe =
-    typeof r.pe === 'number' ? r.pe :
-    typeof r.priceEarningsRatio === 'number' ? r.priceEarningsRatio :
-    typeof r.peRatio === 'number' ? r.peRatio :
-    undefined;
+  // Short-circuit if no further filters
+  const needHistorical = plan.historical?.length > 0;
+  const needTechnical = plan.technical?.length > 0;
 
-
-  return {
-    symbol: r.symbol,
-    companyName: r.companyName ?? r.companyName,
-    price: r.price,
-    sector: r.sector,
-    volume: r.volume,
-    marketCap: r.marketCap,
-    per: pe,                      // ← ensure PER is attached
-    dailyChangePct: dailyPct,     // ← for the price column "($xxx (y%))"
-  };
-});
-
-
-  // Short circuit if nothing else to compute
-  const needHistorical = plan.historical.length > 0;
-  const needTechnical = plan.technical.length > 0;
-  if (!needHistorical && !needTechnical) return rows;
-
-  // 2) Historical evaluation
-  let afterHistorical: (ScreenerRow & { explain?: Explain[] })[] = rows;
+  // 2) Historical (priceChangePctNDays with op)
   if (needHistorical) {
-    const maxDays = Math.max(...plan.historical.map(h => ('days' in h ? h.days : 0)));
-    const runSymbolHist = pLimit(MAX_CONCURRENCY, async (row: (ScreenerRow & { explain?: Explain[] })) => {
+    // One pass per symbol: figure out max days needed
+    const maxDays = Math.max(
+      0,
+      ...plan.historical.map((h: any) => (typeof h.days === 'number' ? h.days : 0))
+    );
+
+    const runHist = pLimit(MAX_CONCURRENCY, async (row: ScreenerRow & { explain?: Explain[] }) => {
       try {
         const series = await fetchHistorical(row.symbol, maxDays, apiKey);
-        const ex = explainForSeries(series, plan.historical);
-        if (!passesAll(ex)) return null;
+        const ex: Explain[] = row.explain ? [...row.explain] : [];
 
-        // attach computed values for table (e.g., priceChangePct)
-        const priceEx = ex.find(e => e.id === 'pv.priceChangePctN' && e.value !== undefined);
-        if (priceEx) row.priceChangePct = Number(priceEx.value);
-        row.explain = (row.explain ?? []).concat(ex);
+        // Compute and check priceChangePctNDays
+        for (const h of plan.historical as any[]) {
+          if (h.kind === 'priceChangePctNDays') {
+            const pct = computePriceChangePctNDays(series, h.days);
+            // store value
+            if (typeof pct === 'number') row.priceChangePct = pct;
+            const pass = typeof pct === 'number'
+              ? (h.op === 'lte' ? pct <= h.pct : pct >= h.pct)
+              : false;
+            ex.push({ id: 'pv.priceChangePctN', pass, value: typeof pct === 'number' ? pct.toFixed(2) : undefined });
+            if (!pass) return null; // fail early
+          } else if (h.kind === 'volumeChangePctNDays') {
+            const pct = computeVolumeChangePctNDays(series, h.days);
+            const pass = typeof pct === 'number' ? pct >= h.pct : false;
+            ex.push({ id: 'pv.volumeChangePctN', pass, value: typeof pct === 'number' ? pct.toFixed(2) : undefined });
+            if (!pass) return null;
+          }
+        }
+
+        row.explain = ex;
         return row;
       } catch {
         return null;
       }
     });
 
-    const settled = await Promise.allSettled(afterHistorical.map((r) => runSymbolHist(r)));
-    const filtered: (ScreenerRow & { explain?: Explain[] })[] = [];
-    for (const s of settled) {
-      if (s.status === 'fulfilled' && s.value) filtered.push(s.value);
-    }
-    afterHistorical = filtered;
+    const settled = await Promise.allSettled(rows.map((r) => runHist(r)));
+    rows = [];
+    for (const s of settled) if (s.status === 'fulfilled' && s.value) rows.push(s.value);
   }
 
-  // 3) Technical (RSI) evaluation
-  if (!needTechnical) return afterHistorical;
-
-  const rsiFilters = plan.technical.filter(t => t.kind === 'rsi') as TechnicalFilterRSI[];
-  if (!rsiFilters.length) return afterHistorical;
-
-  // for now AND all RSI filters (usually one)
-  const runRSI = pLimit(MAX_CONCURRENCY, async (row: (ScreenerRow & { explain?: Explain[] })) => {
-    try {
-      for (const f of rsiFilters) {
-        const data = await fetchRSI(row.symbol, f.timeframe, f.period, apiKey);
-        const val = data.value;
-        if (typeof val !== 'number') {
-          return null; // no data => fail the RSI condition
+  // 3) Technical (RSI)
+  if (needTechnical) {
+    // determine distinct RSI requests (assume one for now; extendable)
+    const rsiFilters = (plan.technical || []).filter((t: any) => t.kind === 'rsi') as TechnicalFilterRSI[];
+    if (rsiFilters.length) {
+      const rf = rsiFilters[0]; // AND semantics: if you add multiple, loop them
+      const runRSI = pLimit(MAX_CONCURRENCY, async (row: ScreenerRow & { explain?: Explain[] }) => {
+        try {
+          const data = await fetchRSI(row.symbol, rf.timeframe, rf.period, apiKey);
+          const val = data?.value;
+          const pass = typeof val === 'number' ? (rf.op === 'lte' ? val <= rf.value : val >= rf.value) : false;
+          const ex = row.explain ? [...row.explain] : [];
+          ex.push({ id: 'ti.rsi', pass, value: typeof val === 'number' ? val.toFixed(2) : undefined });
+          row.explain = ex;
+          if (typeof val === 'number') row.rsi = val;
+          return pass ? row : null;
+        } catch {
+          return null;
         }
-        const pass = f.op === 'lte' ? val <= f.value : val >= f.value;
-        if (!pass) return null;
+      });
 
-        // Attach RSI + explain
-        row.rsi = val;
-        row.explain = (row.explain ?? []);
-        row.explain.push({ id: 'ti.rsi', pass: true, value: val.toFixed(2) });
-      }
-      return row;
-    } catch {
-      return null;
+      const settled = await Promise.allSettled(rows.map((r) => runRSI(r)));
+      const filtered: (ScreenerRow & { explain?: Explain[] })[] = [];
+      for (const s of settled) if (s.status === 'fulfilled' && s.value) filtered.push(s.value);
+      rows = filtered;
     }
-  });
- // --- Enrich PER for symbols that still don't have it ---
-  const missingPer = rows.filter(r => typeof r.per !== 'number').map(r => r.symbol);
+  }
 
-
-  // Define a typed runner that will always be callable
-  type PERFn = (symbol: string, apiKey: string) => Promise<{ symbol: string; per?: number }>;
-
-
-  // If you have a pLimit helper available, wrap fetchCompanyPER with it; otherwise use fetchCompanyPER directly.
-  const perRunner: PERFn =
-    (typeof pLimit === 'function')
-      ? (pLimit(MAX_CONCURRENCY, fetchCompanyPER) as unknown as PERFn)
-      : fetchCompanyPER;
-
-
-  if (missingPer.length) {
-    const perFetches = missingPer.map((sym) => perRunner(sym, apiKey));
-    const perResults = await Promise.allSettled(perFetches);
-
-
-    const perMap = new Map<string, number>();
-    for (const pr of perResults) {
-      if (pr.status === 'fulfilled' && typeof pr.value?.per === 'number') {
-        perMap.set(pr.value.symbol, pr.value.per);
+  // 4) Enrich PER for rows missing it (Key Metrics / Ratios)
+  {
+    const missing = rows.filter(r => typeof r.per !== 'number').map(r => r.symbol);
+    if (missing.length) {
+      type PERFn = (s: string, k: string) => Promise<{ symbol: string; per?: number }>;
+      const perRunner: PERFn = pLimit(MAX_CONCURRENCY, (s: string, k: string) => fetchCompanyPER(s, k));
+      const perResults = await Promise.allSettled(missing.map(sym => perRunner(sym, apiKey)));
+      const perMap = new Map<string, number>();
+      for (const pr of perResults) {
+        if (pr.status === 'fulfilled' && typeof pr.value?.per === 'number') {
+          perMap.set(pr.value.symbol, pr.value.per);
+        }
       }
-    }
-    for (const r of rows) {
-      if (typeof r.per !== 'number' && perMap.has(r.symbol)) {
-        r.per = perMap.get(r.symbol);
+      for (const r of rows) {
+        if (typeof r.per !== 'number' && perMap.has(r.symbol)) {
+          r.per = perMap.get(r.symbol);
+        }
       }
     }
   }
 
-
-  const settledRSI = await Promise.allSettled(afterHistorical.map((r) => runRSI(r)));
-  const filteredRSI: (ScreenerRow & { explain?: Explain[] })[] = [];
-  for (const s of settledRSI) {
-    if (s.status === 'fulfilled' && s.value) filteredRSI.push(s.value);
+  // 5) Apply post filters (PER gte/lte)
+  if ((plan as any).post?.length) {
+    for (const pf of (plan as any).post) {
+      if (pf.kind === 'per') {
+        rows = rows.filter(r => {
+          const val = typeof r.per === 'number' ? r.per : NaN;
+          return pf.op === 'gte' ? val >= pf.value : val <= pf.value;
+        });
+      }
+    }
   }
 
-  return filteredRSI;
+  // Done
+  // (Strip __raw if you kept it)
+  rows.forEach(r => { if ((r as any).__raw) delete (r as any).__raw; });
+  return rows;
 }
