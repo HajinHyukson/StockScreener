@@ -109,8 +109,6 @@ export async function executePlan(
     price: r.price,
     sector: r.sector,
     volume: r.volume,
-
-
     marketCap: r.marketCap,
     per: pe,                      // ← ensure PER is attached
     dailyChangePct: dailyPct,     // ← for the price column "($xxx (y%))"
