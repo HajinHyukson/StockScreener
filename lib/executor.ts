@@ -1,36 +1,32 @@
+// lib/executor.ts
 import type {
   QueryPlan,
   ScreenerRow,
-  HistoricalFilter,
-  TechnicalFilterRSI
+  TechnicalFilterRSI,
 } from './types';
+
+import { fetchHistorical, computePriceChangePctNDays, computeVolumeChangePctNDays } from './historical';
 import { fetchRSI } from './technical';
 import { fetchCompanyPER } from './screener/services/fundamentalsService';
-// If you already have these utilities, keep your existing ones:
-import {
-  fetchHistorical,                    // (symbol, maxDays, apiKey) => price/volume series
-  computePriceChangePctNDays,         // (series, days) => number | undefined
-  computeVolumeChangePctNDays         // (series, days) => number | undefined
-} from './historical';
 
-/** Concurrency controls */
+// ===== Concurrency =====
 const MAX_CONCURRENCY = Number(process.env.MAX_CONCURRENCY ?? 6);
 
-/** Minimal p-limit */
-function pLimit<T extends (...args: any[]) => Promise<any>>(concurrency: number, fn: T) {
+/** Minimal p-limit with proper Awaited typing */
+function pLimit<T extends (...args: any[]) => any>(concurrency: number, fn: T) {
   let active = 0;
-  const queue: (() => void)[] = [];
+  const queue: Array<() => void> = [];
   const next = () => {
     active--;
     const job = queue.shift();
     if (job) job();
   };
-  return (...args: Parameters<T>) =>
-    new Promise<ReturnType<T>>((resolve, reject) => {
+  return (...args: Parameters<T>): Promise<Awaited<ReturnType<T>>> =>
+    new Promise((resolve, reject) => {
       const run = () => {
         active++;
-        fn(...args)
-          .then((r) => { next(); resolve(r as any); })
+        Promise.resolve(fn(...args))
+          .then((r: any) => { next(); resolve(r as Awaited<ReturnType<T>>); })
           .catch((e) => { next(); reject(e); });
       };
       if (active < concurrency) run();
@@ -38,7 +34,7 @@ function pLimit<T extends (...args: any[]) => Promise<any>>(concurrency: number,
     });
 }
 
-/** Build /stock-screener URL from plan.base */
+// ===== Helpers =====
 function buildScreenerUrl(base: QueryPlan['base'], limit: number, apiKey: string): string {
   const params = new URLSearchParams();
   for (const b of base) params.set(b.fmpParam, String(b.value));
@@ -47,10 +43,8 @@ function buildScreenerUrl(base: QueryPlan['base'], limit: number, apiKey: string
   return `https://financialmodelingprep.com/api/v3/stock-screener?${params.toString()}`;
 }
 
-/** Explain entry */
 type Explain = { id: string; pass: boolean; value?: string };
 
-/** Convert screener payload row -> ScreenerRow (robust keys) */
 function mapScreenerRow(raw: any): ScreenerRow {
   // daily % change can be numeric or "1.23%"
   let dailyPct: number | undefined;
@@ -61,7 +55,7 @@ function mapScreenerRow(raw: any): ScreenerRow {
     if (m) dailyPct = Number(m[0]);
   }
 
-  // PER / P-E ratio under different keys
+  // PER under different keys
   const pe =
     typeof raw.pe === 'number' ? raw.pe :
     typeof raw.priceEarningsRatio === 'number' ? raw.priceEarningsRatio :
@@ -80,26 +74,7 @@ function mapScreenerRow(raw: any): ScreenerRow {
   };
 }
 
-/** Attach RSI explain + value */
-function explainRSI(
-  series: any[],
-  rsiFilters: TechnicalFilterRSI[],
-  r: ScreenerRow
-): Explain[] {
-  const ex: Explain[] = [];
-  // We compute RSI via the API (fetchRSI), not from series — series is left for price change.
-  // The caller will fill ex using fetchRSI; this helper unused for RSI; keep for future.
-  return ex;
-}
-
-/**
- * Execute the plan:
- *  1) /stock-screener for base filters
- *  2) historical filters (priceChangePctNDays with op, volumeChange optional)
- *  3) technical RSI
- *  4) enrich PER when missing
- *  5) apply post filters (PER gte/lte)
- */
+// ===== Executor =====
 export async function executePlan(
   plan: QueryPlan & { post?: Array<{ kind: 'per'; op: 'lte' | 'gte'; value: number }> },
   limit: number,
@@ -115,42 +90,36 @@ export async function executePlan(
   // Map to our row shape
   let rows: (ScreenerRow & { explain?: Explain[]; __raw?: any })[] = baseRows.map((raw) => {
     const r = mapScreenerRow(raw);
-    (r as any).__raw = raw; // keep for robust fallbacks (optional)
+    (r as any).__raw = raw; // optional keep
     return r;
   });
 
-  // Short-circuit if no further filters
+  // Skip if nothing else to do
   const needHistorical = plan.historical?.length > 0;
   const needTechnical = plan.technical?.length > 0;
 
-  // 2) Historical (priceChangePctNDays with op)
+  // 2) Historical filters (priceChange/volumeChange)
   if (needHistorical) {
-    // One pass per symbol: figure out max days needed
-    const maxDays = Math.max(
-      0,
-      ...plan.historical.map((h: any) => (typeof h.days === 'number' ? h.days : 0))
-    );
+    const maxDays = Math.max(0, ...plan.historical.map((h: any) => (typeof h.days === 'number' ? h.days : 0)));
 
     const runHist = pLimit(MAX_CONCURRENCY, async (row: ScreenerRow & { explain?: Explain[] }) => {
       try {
         const series = await fetchHistorical(row.symbol, maxDays, apiKey);
         const ex: Explain[] = row.explain ? [...row.explain] : [];
 
-        // Compute and check priceChangePctNDays
         for (const h of plan.historical as any[]) {
           if (h.kind === 'priceChangePctNDays') {
             const pct = computePriceChangePctNDays(series, h.days);
-            // store value
             if (typeof pct === 'number') row.priceChangePct = pct;
             const pass = typeof pct === 'number'
               ? (h.op === 'lte' ? pct <= h.pct : pct >= h.pct)
               : false;
             ex.push({ id: 'pv.priceChangePctN', pass, value: typeof pct === 'number' ? pct.toFixed(2) : undefined });
-            if (!pass) return null; // fail early
+            if (!pass) return null;
           } else if (h.kind === 'volumeChangePctNDays') {
-            const pct = computeVolumeChangePctNDays(series, h.days);
-            const pass = typeof pct === 'number' ? pct >= h.pct : false;
-            ex.push({ id: 'pv.volumeChangePctN', pass, value: typeof pct === 'number' ? pct.toFixed(2) : undefined });
+            const vpct = computeVolumeChangePctNDays(series, h.days);
+            const pass = typeof vpct === 'number' ? vpct >= h.pct : false;
+            ex.push({ id: 'pv.volumeChangePctN', pass, value: typeof vpct === 'number' ? vpct.toFixed(2) : undefined });
             if (!pass) return null;
           }
         }
@@ -169,10 +138,9 @@ export async function executePlan(
 
   // 3) Technical (RSI)
   if (needTechnical) {
-    // determine distinct RSI requests (assume one for now; extendable)
     const rsiFilters = (plan.technical || []).filter((t: any) => t.kind === 'rsi') as TechnicalFilterRSI[];
     if (rsiFilters.length) {
-      const rf = rsiFilters[0]; // AND semantics: if you add multiple, loop them
+      const rf = rsiFilters[0]; // extend to AND multiple if needed
       const runRSI = pLimit(MAX_CONCURRENCY, async (row: ScreenerRow & { explain?: Explain[] }) => {
         try {
           const data = await fetchRSI(row.symbol, rf.timeframe, rf.period, apiKey);
@@ -195,12 +163,11 @@ export async function executePlan(
     }
   }
 
-  // 4) Enrich PER for rows missing it (Key Metrics / Ratios)
+  // 4) Enrich PER where missing
   {
     const missing = rows.filter(r => typeof r.per !== 'number').map(r => r.symbol);
     if (missing.length) {
-      type PERFn = (s: string, k: string) => Promise<{ symbol: string; per?: number }>;
-      const perRunner: PERFn = pLimit(MAX_CONCURRENCY, (s: string, k: string) => fetchCompanyPER(s, k));
+      const perRunner = pLimit(MAX_CONCURRENCY, (s: string, k: string) => fetchCompanyPER(s, k));
       const perResults = await Promise.allSettled(missing.map(sym => perRunner(sym, apiKey)));
       const perMap = new Map<string, number>();
       for (const pr of perResults) {
@@ -216,7 +183,7 @@ export async function executePlan(
     }
   }
 
-  // 5) Apply post filters (PER gte/lte)
+  // 5) Apply post filters (PER)
   if ((plan as any).post?.length) {
     for (const pf of (plan as any).post) {
       if (pf.kind === 'per') {
@@ -228,8 +195,7 @@ export async function executePlan(
     }
   }
 
-  // Done
-  // (Strip __raw if you kept it)
+  // Finish
   rows.forEach(r => { if ((r as any).__raw) delete (r as any).__raw; });
   return rows;
 }
