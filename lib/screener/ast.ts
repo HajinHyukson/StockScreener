@@ -2,7 +2,6 @@ import type { RuleAST } from '@/types';
 import { allFilters } from '@/filters';
 
 
-/** Flatten all condition nodes out of an AST */
 export function flattenConditions(ast: RuleAST): { id: string; params: any }[] {
   const out: { id: string; params: any }[] = [];
   const walk = (n?: RuleAST) => {
@@ -15,7 +14,6 @@ export function flattenConditions(ast: RuleAST): { id: string; params: any }[] {
 }
 
 
-/** Build AST by asking each filter module to emit AST nodes from its value bucket */
 export function buildASTFromFilterValues(values: Record<string, any>): RuleAST {
   const children: RuleAST[] = [];
   for (const f of allFilters) {
@@ -31,7 +29,6 @@ export function buildASTFromFilterValues(values: Record<string, any>): RuleAST {
 }
 
 
-/** Convert AST back into the filter value buckets */
 export function valuesFromAST(ast: RuleAST): Record<string, any> {
   const entries = flattenConditions(ast);
   const merged: Record<string, any> = {};
@@ -45,7 +42,6 @@ export function valuesFromAST(ast: RuleAST): Record<string, any> {
 }
 
 
-/** Summary for “View Rule” */
 export function summaryFromValues(values: Record<string, any>): Record<string, string> {
   const s: Record<string, string> = {};
   for (const f of allFilters) {
@@ -57,21 +53,3 @@ export function summaryFromValues(values: Record<string, any>): Record<string, s
   }
   return s;
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

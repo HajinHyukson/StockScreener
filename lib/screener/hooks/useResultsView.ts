@@ -4,38 +4,28 @@ import { useMemo } from 'react';
 
 export function useResultsView(state: any) {
   const today = new Date().toLocaleDateString('en-US', { timeZone: 'Asia/Seoul', year: 'numeric', month: 'short', day: '2-digit' });
-
-
   const selectedFund = useMemo(() => new Set(state.fundamentalSel || []), [state.fundamentalSel]);
   const selectedTech = useMemo(() => new Set(state.technicalSel || []), [state.technicalSel]);
-
-
   const showMarketCap = selectedFund.has('base.marketCap');
   const showPER      = selectedFund.has('fa.per');
   const showRSI      = selectedTech.has('ti.rsi');
   const showNDays    = !!state.filterValues?.['pv.priceChangePctN'];
-
-
   const priceChangeVal = state.filterValues?.['pv.priceChangePctN'];
   const priceColTitle = priceChangeVal?.days ? `Price (${priceChangeVal.days} days % change)` : 'Price';
 
 
-  // Sorted rows
   const sorted = useMemo(() => {
     const rows = [...(state.rows || [])];
     rows.sort((a: any, b: any) => {
-      const key = state.sortKey;
-      const dir = state.sortDir;
-      let av: any, bv: any;
+      const key = state.sortKey, dir = state.sortDir;
       if (key === 'symbol' || key === 'companyName' || key === 'sector') {
-        av = String(a[key] ?? '').toUpperCase();
-        bv = String(b[key] ?? '').toUpperCase();
-        return dir === 'asc' ? av.localeCompare(bv) : bv.localeCompare(av);
+        const A = String(a[key] ?? '').toUpperCase(), B = String(b[key] ?? '').toUpperCase();
+        return dir === 'asc' ? A.localeCompare(B) : B.localeCompare(A);
       }
-      av = a[key]; bv = b[key];
-      if (typeof av !== 'number') av = -Infinity;
-      if (typeof bv !== 'number') bv = -Infinity;
-      return dir === 'asc' ? av - bv : bv - av;
+      let A = a[key], B = b[key];
+      if (typeof A !== 'number') A = -Infinity;
+      if (typeof B !== 'number') B = -Infinity;
+      return dir === 'asc' ? A - B : B - A;
     });
     return rows;
   }, [state.rows, state.sortKey, state.sortDir]);
@@ -48,12 +38,5 @@ export function useResultsView(state: any) {
   );
 
 
-  return {
-    today,
-    showMarketCap, showPER, showRSI, showNDays,
-    priceColTitle,
-    sorted, totalPages, pageRows,
-  };
+  return { today, showMarketCap, showPER, showRSI, showNDays, priceColTitle, sorted, totalPages, pageRows };
 }
-
-
