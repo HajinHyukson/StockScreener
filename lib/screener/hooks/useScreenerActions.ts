@@ -1,8 +1,8 @@
 'use client';
 import type { RuleAST } from '@/types';
 import { buildASTFromFilterValues, summaryFromValues, valuesFromAST } from '@/lib/screener/ast';
-import { runScreener } from '@/screener/services/runService';
-import { listRules, saveRule as saveRuleApi, deleteRule as deleteRuleApi } from '@/screener/services/rulesService';
+import { runScreener } from '../services/runService';
+import { listRules, saveRule as saveRuleApi, deleteRule as deleteRuleApi } from '../services/rulesService';
 import { allFilters } from '@/filters';
 
 
