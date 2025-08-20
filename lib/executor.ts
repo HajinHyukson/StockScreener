@@ -5,7 +5,7 @@ import type {
   TechnicalFilterRSI
 } from './types';
 import { fetchRSI } from './technical';
-
+import { fetchCompanyPER } from './services/fundamentalsService';
 // If you already have these utilities, keep your existing ones:
 import {
   fetchHistorical,                    // (symbol, maxDays, apiKey) => price/volume series
@@ -177,6 +177,33 @@ export async function executePlan(
       return null;
     }
   });
+  // --- Enrich PER for symbols that still don't have it ---
+  const missingPer = rows.filter(r => typeof r.per !== 'number').map(r => r.symbol);
+
+
+  // Limit concurrency to be polite (reuse your pLimit if present)
+  const limit = pLimit ? pLimit(MAX_CONCURRENCY, fetchCompanyPER) : null;
+
+
+  if (missingPer.length) {
+    const perFetches = missingPer.map(sym =>
+      limit ? limit(sym, apiKey) : fetchCompanyPER(sym, apiKey)
+    );
+    const perResults = await Promise.allSettled(perFetches);
+
+
+    const perMap = new Map<string, number>();
+    for (const pr of perResults) {
+      if (pr.status === 'fulfilled' && typeof pr.value?.per === 'number') {
+        perMap.set(pr.value.symbol, pr.value.per);
+      }
+    }
+    for (const r of rows) {
+      if (typeof r.per !== 'number' && perMap.has(r.symbol)) {
+        r.per = perMap.get(r.symbol);
+      }
+    }
+  }
 
   const settledRSI = await Promise.allSettled(afterHistorical.map((r) => runRSI(r)));
   const filteredRSI: (ScreenerRow & { explain?: Explain[] })[] = [];
