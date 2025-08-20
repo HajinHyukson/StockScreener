@@ -12,6 +12,9 @@
     "baseUrl": ".",
     "paths": {
       "@/*": ["./*"],
+      "@/filters": ["lib/filters/index"],
+      "@/types": ["lib/types"]
+      "@/screener": ["lib/screener/*"]
 }
 
 

@@ -2,36 +2,38 @@
 import { useEffect, useMemo, useState } from 'react';
 import { allFilters } from '../lib/filters';
 
-/** ===== Minimal shared types ===== */
-export type RuleAST =
-  | { type: 'condition'; id: string; params: Record<string, any> }
-  | { type: 'AND' | 'OR' | 'NOT'; children: RuleAST[] };
+/**Hook imports */
+import { useScreenerState } from '../lib/screener/hooks/useScreenerState';
+import { useCombos } from '../lib/screener/hooks/useCombos';
+import { useScreenerActions } from '../lib/screener/hooks/useScreenerActions';
+import { useResultsView } from '../lib/screener/hooks/useResultsView';
 
-type SavedRule = {
-  id: string;
-  name: string;
-  ast: RuleAST;
-  createdAt: string;
-  updatedAt: string;
-};
 
+
+/** ===== Minimal shared types for the table row ===== */
 type Row = {
   symbol: string;
   companyName?: string;
   price?: number;
-  marketCap?: number;
   sector?: string;
   volume?: number;
-  priceChangePct?: number;
+
+
+  marketCap?: number;
+  per?: number;                 // PER (P/E)
   rsi?: number;
-  per?: number;
-  dailyChangePct?: number;
+  priceChangePct?: number;      // N-day price change (from historical)
+  dailyChangePct?: number;      // daily % change for the price cell
+
+
   explain?: { id: string; pass: boolean; value?: string }[];
 };
 
+
 type SortKey = 'symbol' | 'companyName' | 'price' | 'marketCap' | 'sector' | 'priceChangePct';
 
-/** ===== Helpers ===== */
+
+/** ===== Helpers for rendering ===== */
 function formatInt(n?: number) {
   if (typeof n !== 'number' || !isFinite(n)) return '—';
   return n.toLocaleString('en-US');
@@ -39,11 +41,6 @@ function formatInt(n?: number) {
 function formatUsd(n?: number) {
   if (typeof n !== 'number' || !isFinite(n)) return '—';
   return `$${n.toLocaleString('en-US')}`;
-}
-function formatPct(n?: number) {
-  if (typeof n !== 'number' || !isFinite(n)) return '—';
-  const sign = n > 0 ? '+' : n < 0 ? '' : '';
-  return `${sign}${n.toFixed(2)}%`;
 }
 function formatKST(iso?: string) {
   if (!iso) return '—';
@@ -54,12 +51,14 @@ function formatKST(iso?: string) {
     month: 'short',
     day: '2-digit',
     hour: '2-digit',
-    minute: '2-digit',
+    minute: '2-digit'
   });
 }
 
-/** -------- Searchable ComboBox (alphabetized externally via options prop) -------- */
+
+/** -------- Single-select ComboBox (for future use) -------- */
 type ComboOption = { value: string; label: string };
+
 
 function ComboBox({
   options,
@@ -75,18 +74,21 @@ function ComboBox({
   width?: string | number;
 }) {
   const [open, setOpen] = useState(false);
-  const [query, setQuery] = useState<string>('');
+  const [query, setQuery] = useState('');
+
 
   const activeLabel = useMemo(
-    () => options.find((o) => o.value === value)?.label ?? '',
+    () => options.find(o => o.value === value)?.label ?? '',
     [options, value]
   );
+
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return options;
-    return options.filter((o) => o.label.toLowerCase().includes(q));
+    return options.filter(o => o.label.toLowerCase().includes(q));
   }, [options, query]);
+
 
   return (
     <div style={{ position: 'relative', width }}>
@@ -99,24 +101,20 @@ function ComboBox({
           borderRadius: 6,
           padding: '6px 8px',
           background: '#fff',
-          cursor: 'text',
+          cursor: 'text'
         }}
-        onClick={() => {
-          setOpen(true);
-        }}
+        onClick={() => setOpen(true)}
       >
         <input
           value={open ? query : activeLabel}
-          onChange={(e) => {
-            setQuery(e.target.value);
-            setOpen(true);
-          }}
+          onChange={(e) => { setQuery(e.target.value); setOpen(true); }}
           onFocus={() => setOpen(true)}
           placeholder={placeholder}
           style={{ width: '100%', border: 'none', outline: 'none', background: 'transparent' }}
         />
         <span style={{ fontSize: 12, color: '#64748b' }}>▾</span>
       </div>
+
 
       {open && (
         <div
@@ -130,45 +128,43 @@ function ComboBox({
             overflowY: 'auto',
             border: '1px solid #e2e8f0',
             background: '#fff',
-            borderRadius: 6,
-            boxShadow: '0 8px 18px rgba(0,0,0,0.08)',
+            borderRadius: 6
           }}
         >
           {filtered.length === 0 ? (
             <div style={{ padding: 8, color: '#94a3b8', fontSize: 14 }}>No matches</div>
-          ) : (
-            filtered.map((o) => (
-              <div
-                key={o.value || 'none'}
-                onMouseDown={(e) => {
-                  e.preventDefault();
-                  onChange(o.value);
-                  setQuery('');
-                  setOpen(false);
-                }}
-                style={{
-                  padding: '8px 10px',
-                  cursor: 'pointer',
-                  background: o.value === value ? '#f1f5f9' : undefined,
-                }}
-              >
-                {o.label}
-              </div>
-            ))
-          )}
+          ) : filtered.map((o) => (
+            <div
+              key={o.value || 'none'}
+              onMouseDown={(e) => {
+                e.preventDefault();
+                onChange(o.value);
+                setQuery('');
+                setOpen(false);
+              }}
+              style={{
+                padding: '8px 10px',
+                cursor: 'pointer',
+                background: o.value === value ? '#f1f5f9' : undefined
+              }}
+            >
+              {o.label}
+            </div>
+          ))}
         </div>
       )}
-
       {open && (
         <div
           onClick={() => setOpen(false)}
-          style={{ position: 'fixed', inset: 0, zIndex: 10, background: 'transparent' }}
+          style={{ position: 'fixed', inset: 0, zIndex: 10 }}
         />
       )}
     </div>
   );
 }
-/** -------- Multi-select ComboBox (alphabetized by caller) -------- */
+
+
+/** -------- Multi-select ComboBox (Fundamental/Technical) -------- */
 function MultiComboBox({
   options,
   values,
@@ -183,14 +179,12 @@ function MultiComboBox({
   width?: string | number;
 }) {
   const [open, setOpen] = useState(false);
-  const [query, setQuery] = useState<string>('');
+  const [query, setQuery] = useState('');
 
 
   const label = useMemo(() => {
     if (!values?.length) return '';
-    const labels = values
-      .map(v => options.find(o => o.value === v)?.label)
-      .filter(Boolean) as string[];
+    const labels = values.map(v => options.find(o => o.value === v)?.label).filter(Boolean) as string[];
     return labels.join(', ');
   }, [values, options]);
 
@@ -248,8 +242,7 @@ function MultiComboBox({
             overflowY: 'auto',
             border: '1px solid #e2e8f0',
             background: '#fff',
-            borderRadius: 6,
-            boxShadow: '0 8px 18px rgba(0,0,0,0.08)'
+            borderRadius: 6
           }}
         >
           {filtered.length === 0 ? (
@@ -277,304 +270,42 @@ function MultiComboBox({
             })}
         </div>
       )}
-
-
       {open && (
         <div
           onClick={() => setOpen(false)}
-          style={{ position: 'fixed', inset: 0, zIndex: 10, background: 'transparent' }}
+          style={{ position: 'fixed', inset: 0, zIndex: 10 }}
         />
       )}
     </div>
   );
 }
 
-/** ===== AST utils ===== */
-function flattenConditions(ast: RuleAST): { id: string; params: any }[] {
-  const out: { id: string; params: any }[] = [];
-  const walk = (n: RuleAST) => {
-    if (!n) return;
-    if (n.type === 'condition') out.push({ id: n.id, params: n.params ?? {} });
-    else if ((n.type === 'AND' || n.type === 'OR' || n.type === 'NOT') && Array.isArray((n as any).children)) {
-      (n as any).children.forEach(walk);
-    }
-  };
-  walk(ast);
-  return out;
-}
 
-function buildASTFromFilterValues(values: Record<string, any>) {
-  const children: RuleAST[] = [];
-  for (const f of allFilters) {
-    const v = values[f.id];
-    if (!v) continue;
-    const nodes = f.toAST(v);
-    if (Array.isArray(nodes) && nodes.length) children.push(...nodes);
-  }
-  if (children.length === 0) {
-    children.push({ type: 'condition', id: 'base.exchange', params: { value: 'NASDAQ' } });
-  }
-  return children.length === 1 ? children[0] : ({ type: 'AND', children } as RuleAST);
-}
-
-function summaryFromValues(values: Record<string, any>) {
-  const s: Record<string, string> = {};
-  for (const f of allFilters) {
-    if (!values[f.id]) continue;
-    const part = f.summarize?.(values[f.id]) ?? {};
-    for (const [k, v] of Object.entries(part)) {
-      if (v !== undefined && v !== null && v !== '') s[k] = String(v);
-    }
-  }
-  return s;
-}
-
-function valuesFromAST(ast: RuleAST) {
-  const entries = flattenConditions(ast);
-  const merged: Record<string, any> = {};
-  for (const f of allFilters) {
-    for (const e of entries) {
-      const v = f.fromAST({ type: 'condition', id: e.id, params: e.params });
-      if (v !== undefined) merged[f.id] = { ...(merged[f.id] ?? {}), ...(v ?? {}) };
-    }
-  }
-  return merged;
-}
-
-/** ===== Page ===== */
+/** ===== Page (now using hooks) ===== */
 export default function Page() {
-  /** Filter state (modular by filter id) */
-  const [filterValues, setFilterValues] = useState<Record<string, any>>({
-    'base.exchange': { value: 'NASDAQ' },
-  });
-
-  /** Combos that control visibility of optional groups */
-  const [fundamentalSel, setFundamentalSel] = useState<string[]>([]);
-  const [technicalSel, setTechnicalSel] = useState<string[]>([]);
-  const showMarketCap = fundamentalSel === 'base.marketCap' && !!filterValues['base.marketCap'];
-  const showPER = !!filterValues['fa.per'];       // from perFilter.id
-  const showRSI = technicalSel === 'ti.rsi' && !!filterValues['ti.rsi'];
-  const showNDays = !!filterValues['pv.priceChangePctN'];  // N-day price change
-
-  /** Data & pagination */
-  const [serverLimit, setServerLimit] = useState(50);
-  const [rows, setRows] = useState<Row[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-  const [hasMore, setHasMore] = useState(true);
-
-  /** Sorting */
-  const [sortKey, setSortKey] = useState<SortKey>('marketCap');
-  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
-
-  /** Client pagination */
-  const [page, setPage] = useState(1);
-  const pageSize = 25;
-
-  /** Rules */
-  const [ruleName, setRuleName] = useState('');
-  const [saving, setSaving] = useState(false);
-  const [rules, setRules] = useState<SavedRule[]>([]);
-  const [loadingRules, setLoadingRules] = useState(false);
-  const [rulesError, setRulesError] = useState<string | null>(null);
-
-  /** Modals */
-  const [viewOpen, setViewOpen] = useState(false);
-  const [viewData, setViewData] = useState<{ name: string; fields: Record<string, string> } | null>(null);
-  const [explainOpen, setExplainOpen] = useState(false);
-  const [explainRow, setExplainRow] = useState<Row | null>(null);
-
-  /** Help + data time */
-  const [helpOpen, setHelpOpen] = useState(false);
-  const [asOf, setAsOf] = useState<string | null>(null);
-
-  /** Dynamic, alphabetized combo options from registry */
-  const fundamentalOptions: ComboOption[] = useMemo(() => {
-    return allFilters
-      .filter(f => f.group === 'fundamental')
-      .map(f => ({ value: f.id, label: f.label }))
-      .sort((a, b) => a.label.localeCompare(b.label));
-  }, []);
+  // Hook-based state (replaces many local useStates)
+  const state = useScreenerState<Row>();
 
 
-  const technicalOptions: ComboOption[] = useMemo(() => {
-    return allFilters
-      .filter(f => f.group === 'technical')
-      .map(f => ({ value: f.id, label: f.label }))
-      .sort((a, b) => a.label.localeCompare(b.label));
-  }, []);
+  // Options + prune helper derived from registry
+  const { fundamentalOptions, technicalOptions, pruneInactive } =
+    useCombos(state.fundamentalSel, state.technicalSel);
 
 
-  /** ---- Backend runner ---- */
-  async function runWithAst(ast: RuleAST, nextLimit?: number, append = false) {
-    setLoading(true);
-    setErr(null);
-    const requestedLimit = Number.isFinite(nextLimit as number) ? (nextLimit as number) : serverLimit;
-    try {
-      const res = await fetch('/api/run', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ast, limit: requestedLimit })
-      });
-      const json = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        const msg = (json as any)?.error || `HTTP ${res.status}`;
-        const detail = (json as any)?.detail ? ` — ${(json as any).detail}` : '';
-        throw new Error(msg + detail);
-      }
+  // Orchestrated actions (run, loadMore, rules CRUD, apply, view)
+  const actions = useScreenerActions(state, { pruneInactive });
 
-      setAsOf((json as any)?.asOf || (json as any)?.timestamp || new Date().toISOString());
 
-      const data: Row[] = Array.isArray((json as any)?.rows) ? (json as any).rows : [];
-      if (append) {
-        const existing = new Set(rows.map(r => r.symbol));
-        const add = data.filter(r => !existing.has(r.symbol));
-        setRows([...rows, ...add]);
-        setHasMore(data.length >= requestedLimit);
-      } else {
-        setRows(data);
-        setHasMore(data.length >= requestedLimit);
-        setPage(1);
-      }
-      setServerLimit(requestedLimit);
-    } catch (e: any) {
-      setErr(e.message ?? 'Error');
-      if (!append) setRows([]);
-      setHasMore(false);
-    } finally {
-      setLoading(false);
-    }
-  }
+  // Derived view (sorted/paged rows, toggles, titles)
+  const view = useResultsView(state);
 
-  async function run() {
-    const values = { ...filterValues };
-    if (fundamentalSel !== 'base.marketCap') delete values['base.marketCap'];
-    if (technicalSel !== 'ti.rsi') delete values['ti.rsi'];
-    const ast = buildASTFromFilterValues(values);
-    setServerLimit(50);
-    await runWithAst(ast, 50, false);
-  }
 
-  async function loadMore() {
-    const values = { ...filterValues };
-    if (fundamentalSel !== 'base.marketCap') delete values['base.marketCap'];
-    if (technicalSel !== 'ti.rsi') delete values['ti.rsi'];
-    const ast = buildASTFromFilterValues(values);
-    const next = serverLimit + 50;
-    await runWithAst(ast, next, true);
-  }
-
-  /** ---- Rules CRUD ---- */
-  async function saveCurrentRule() {
-    setSaving(true);
-    try {
-      const values = { ...filterValues };
-      if (fundamentalSel !== 'base.marketCap') delete values['base.marketCap'];
-      if (technicalSel !== 'ti.rsi') delete values['ti.rsi'];
-      const ast = buildASTFromFilterValues(values);
-      const name = ruleName.trim() || `Rule ${new Date().toLocaleString()}`;
-      const res = await fetch('/api/rules', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, ast })
-      });
-      if (!res.ok) throw new Error('Save failed');
-      setRuleName('');
-      await loadRules();
-    } catch (e: any) {
-      alert(e.message);
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  async function loadRules() {
-    setLoadingRules(true);
-    setRulesError(null);
-    try {
-      const res = await fetch('/api/rules');
-      const json = await res.json();
-      setRules(Array.isArray(json.rules) ? json.rules : []);
-    } catch (e: any) {
-      setRulesError(e.message ?? 'Failed to load rules');
-    } finally {
-      setLoadingRules(false);
-    }
-  }
-
-  async function deleteRule(id: string) {
-    if (!confirm('Delete this rule?')) return;
-    await fetch(`/api/rules/${id}`, { method: 'DELETE' });
-    await loadRules();
-  }
-
-  async function applyRuleAndRun(rule: SavedRule) {
-    const vals = valuesFromAST(rule.ast);
-    setFilterValues(vals);
-    setFundamentalSel(vals['base.marketCap'] ? 'base.marketCap' : '');
-    setTechnicalSel(vals['ti.rsi'] ? 'ti.rsi' : '');
-    setServerLimit(50);
-    await runWithAst(rule.ast, 50, false);
-  }
-
-  function openViewModal(rule: SavedRule) {
-    const vals = valuesFromAST(rule.ast);
-    const fields = summaryFromValues(vals);
-    setViewData({ name: rule.name, fields });
-    setViewOpen(true);
-  }
-
+  // Load rule list on mount
   useEffect(() => {
-    loadRules();
+    actions.loadRules();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  /** ---- Sorting (client-side) ---- */
-  const sorted = useMemo(() => {
-    const cp = [...rows];
-    cp.sort((a, b) => {
-      let av: any, bv: any;
-      switch (sortKey) {
-        case 'symbol':
-        case 'companyName':
-        case 'sector': {
-          av = String((a as any)[sortKey] ?? '').toUpperCase();
-          bv = String((b as any)[sortKey] ?? '').toUpperCase();
-          return sortDir === 'asc' ? av.localeCompare(bv) : bv.localeCompare(av);
-        }
-        case 'price':
-        case 'marketCap':
-        case 'priceChangePct': {
-          av = (a as any)[sortKey]; 
-          bv = (b as any)[sortKey];
-          if (typeof av !== 'number') av = -Infinity;
-          if (typeof bv !== 'number') bv = -Infinity;
-          return sortDir === 'asc' ? av - bv : bv - av;
-        }
-      }
-    });
-    return cp;
-  }, [rows, sortKey, sortDir]);
-
-  const totalPages = Math.max(1, Math.ceil(sorted.length / pageSize));
-  const pageRows = sorted.slice((page - 1) * pageSize, page * pageSize);
-
-  /** ---- Dates / titles ---- */
-  const today = new Date().toLocaleDateString('en-US', {
-    timeZone: 'Asia/Seoul',
-    year: 'numeric',
-    month: 'short',
-    day: '2-digit'
-  });
-
-  const priceChangeVal = filterValues['pv.priceChangePctN'];
-  const priceColTitle = priceChangeVal?.days ? `Price (${priceChangeVal.days} days % change)` : 'Price';
-
-  /** ---- Resolve filter components by id (stable even if registry order changes) ---- */
-  const ExchangeComp = useMemo(() => allFilters.find(f => f.id === 'base.exchange')!.Component, []);
-  const SectorComp = useMemo(() => allFilters.find(f => f.id === 'base.sector')!.Component, []);
-  const PriceChangeComp = useMemo(() => allFilters.find(f => f.id === 'pv.priceChangePctN')!.Component, []);
-  const MarketCapComp = useMemo(() => allFilters.find(f => f.id === 'base.marketCap')!.Component, []);
-  const RSIComp = useMemo(() => allFilters.find(f => f.id === 'ti.rsi')!.Component, []);
 
   /** ===== UI ===== */
   return (
@@ -583,60 +314,21 @@ export default function Page() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 12, flexWrap: 'wrap' }}>
         <h1 style={{ fontSize: 28, fontWeight: 700, marginRight: 8 }}>Stock Screener</h1>
         <div style={{ marginLeft: 'auto', textAlign: 'right', color: '#64748b' }}>
-          <div>{today}</div>
-          <div style={{ fontSize: 12 }}>Data as of: {formatKST(asOf ?? undefined)} (KST)</div>
+          <div>{view.today}</div>
+          <div style={{ fontSize: 12 }}>Data as of: {formatKST(state.asOf ?? undefined)} (KST)</div>
         </div>
       </div>
 
-      {/* Friendly intro */}
+
+      {/* Intro */}
       <p style={{ marginTop: 8, marginBottom: 8, color: '#334155' }}>
         This screener makes it easier to sort through many stocks and focus only on the ones that interest you.
         You can filter by things like exchange, sector, company size, or how the price has been moving.
         Once you find a set of conditions you like, save it as a rule so you can quickly check those stocks again later.
       </p>
 
-      {/* Help panel */}
-      <div style={{ marginBottom: 10 }}>
-        <button
-          onClick={() => setHelpOpen((v) => !v)}
-          style={{ padding: '6px 10px', border: '1px solid #cbd5e1', borderRadius: 6, background: '#f8fafc' }}
-          aria-expanded={helpOpen}
-          aria-controls="help-panel"
-        >
-          {helpOpen ? 'Hide help' : 'How to use this screener'}
-        </button>
-        {helpOpen && (
-          <div
-            id="help-panel"
-            style={{ marginTop: 8, padding: 10, border: '1px solid #e2e8f0', borderRadius: 8, background: '#ffffff' }}
-          >
-            <ol style={{ margin: 0, paddingLeft: 18, color: '#334155' }}>
-              <li style={{ marginBottom: 6 }}>
-                <b>Set filters</b>: Exchange, Sector, Price Change; use Fundamental/Technical combos to add Market Cap or RSI.
-              </li>
-              <li style={{ marginBottom: 6 }}>
-                <b>Run</b>: press <i>Run</i> to fetch and display matching stocks.
-              </li>
-              <li style={{ marginBottom: 6 }}>
-                <b>Sort</b>: "Sort By" and "Sort Direction" to reorder results.
-              </li>
-              <li style={{ marginBottom: 6 }}>
-                <b>More</b>: results load in batches of 50. Click <i>More</i> to load the next batch.
-              </li>
-              <li>
-                <b>Save rules</b>: name your filters to reuse later; click a rule's name to apply it again. Use <i>View</i> or <i>Delete</i>.
-              </li>
-            </ol>
-          </div>
-        )}
-      </div>
 
-      {/* Hint */}
-      <div style={{ color: '#334155', marginBottom: 16 }}>
-        Set filters → <b>Run</b>. Click column headers to sort. ({sorted.length} results loaded)
-      </div>
-
-      {/* Always-visible filters */}
+      {/* Always-visible: Exchange / Sector / Price Change / Sort */}
       <div
         style={{
           display: 'grid',
@@ -647,34 +339,52 @@ export default function Page() {
       >
         {/* Exchange */}
         <div>
-          <ExchangeComp
-            value={filterValues['base.exchange']}
-            onChange={(v) => setFilterValues((s) => ({ ...s, 'base.exchange': v }))}
-          />
+          {(() => {
+            const Mod = allFilters.find(f => f.id === 'base.exchange')!.Component;
+            return (
+              <Mod
+                value={state.filterValues['base.exchange']}
+                onChange={(v: any) => state.setFilterValues((s: any) => ({ ...s, 'base.exchange': v }))}
+              />
+            );
+          })()}
         </div>
+
 
         {/* Sector */}
         <div>
-          <SectorComp
-            value={filterValues['base.sector']}
-            onChange={(v) => setFilterValues((s) => ({ ...s, 'base.sector': v }))}
-          />
+          {(() => {
+            const Mod = allFilters.find(f => f.id === 'base.sector')!.Component;
+            return (
+              <Mod
+                value={state.filterValues['base.sector']}
+                onChange={(v: any) => state.setFilterValues((s: any) => ({ ...s, 'base.sector': v }))}
+              />
+            );
+          })()}
         </div>
+
 
         {/* Price Change (2 controls inside) */}
         <div style={{ gridColumn: 'span 2' }}>
-          <PriceChangeComp
-            value={filterValues['pv.priceChangePctN']}
-            onChange={(v) => setFilterValues((s) => ({ ...s, 'pv.priceChangePctN': v }))}
-          />
+          {(() => {
+            const Mod = allFilters.find(f => f.id === 'pv.priceChangePctN')!.Component;
+            return (
+              <Mod
+                value={state.filterValues['pv.priceChangePctN']}
+                onChange={(v: any) => state.setFilterValues((s: any) => ({ ...s, 'pv.priceChangePctN': v }))}
+              />
+            );
+          })()}
         </div>
 
-        {/* Sorting field */}
+
+        {/* Sort By */}
         <div>
           <div style={{ fontSize: 12, color: '#64748b' }}>Sort By</div>
           <select
-            value={sortKey}
-            onChange={(e) => setSortKey(e.target.value as SortKey)}
+            value={state.sortKey}
+            onChange={(e) => state.setSortKey(e.target.value as SortKey)}
             style={{ width: '100%' }}
           >
             <option value="marketCap">Market Cap</option>
@@ -686,15 +396,16 @@ export default function Page() {
           </select>
         </div>
 
-        {/* Sorting direction */}
+
+        {/* Sort Direction */}
         <div>
           <div style={{ fontSize: 12, color: '#64748b' }}>Sort Direction</div>
           <select
-            value={sortDir}
-            onChange={(e) => setSortDir(e.target.value as 'asc' | 'desc')}
+            value={state.sortDir}
+            onChange={(e) => state.setSortDir(e.target.value as 'asc' | 'desc')}
             style={{ width: '100%' }}
           >
-            {sortKey === 'marketCap' || sortKey === 'price' || sortKey === 'priceChangePct' ? (
+            {state.sortKey === 'marketCap' || state.sortKey === 'price' || state.sortKey === 'priceChangePct' ? (
               <>
                 <option value="asc">Low → High</option>
                 <option value="desc">High → Low</option>
@@ -708,164 +419,142 @@ export default function Page() {
           </select>
         </div>
 
-        {/* Fundamental combo (searchable, alphabetized) */}
+
+        {/* Fundamental multi-select */}
         <div>
           <div style={{ fontSize: 12, color: '#64748b' }}>Fundamental</div>
           <MultiComboBox
             options={fundamentalOptions}
-            values={fundamentalSel}
-            onChange={(vals) => setFundamentalSel(vals)}
-            placeholder="Choose fundamental filters"
+            values={state.fundamentalSel}
+            onChange={(vals) => state.setFundamentalSel(vals)}
           />
         </div>
 
 
-        {/* Technical combo (searchable, alphabetized) */}
-       <div>
+        {/* Technical multi-select */}
+        <div>
           <div style={{ fontSize: 12, color: '#64748b' }}>Technical</div>
           <MultiComboBox
             options={technicalOptions}
-            values={technicalSel}
-            onChange={(vals) => setTechnicalSel(vals)}
-            placeholder="Choose technical filters"
+            values={state.technicalSel}
+            onChange={(vals) => state.setTechnicalSel(vals)}
           />
         </div>
+      </div>
 
 
-      {/* Conditional groups */}
-      {/* Render all selected fundamental filters */}
-      {fundamentalSel.map(fid => {
-        const Mod = allFilters.find(f => f.id === fid)?.Component;
-        if (!Mod) return null;
+      {/* Selected fundamental filter panels */}
+      {state.fundamentalSel.map(fid => {
+        const f = allFilters.find(ff => ff.id === fid);
+        if (!f) return null;
+        const Mod = f.Component;
         return (
           <div key={fid} style={{ marginBottom: 10, border: '1px solid #e2e8f0', borderRadius: 10, padding: 10 }}>
-            <div style={{ fontWeight: 600, marginBottom: 6 }}>
-              Fundamental — {allFilters.find(f => f.id === fid)?.label}
-            </div>
+            <div style={{ fontWeight: 600, marginBottom: 6 }}>Fundamental — {f.label}</div>
             <Mod
-              value={filterValues[fid]}
-              onChange={(v: any) => setFilterValues(s => ({ ...s, [fid]: v }))}
+              value={state.filterValues[fid]}
+              onChange={(v: any) => state.setFilterValues((s: any) => ({ ...s, [fid]: v }))}
             />
           </div>
         );
       })}
 
 
-      {/* Render all selected technical filters */}
-      {technicalSel.map(tid => {
-        const Mod = allFilters.find(f => f.id === tid)?.Component;
-        if (!Mod) return null;
+      {/* Selected technical filter panels */}
+      {state.technicalSel.map(tid => {
+        const f = allFilters.find(ff => ff.id === tid);
+        if (!f) return null;
+        const Mod = f.Component;
         return (
           <div key={tid} style={{ marginBottom: 10, border: '1px solid #e2e8f0', borderRadius: 10, padding: 10 }}>
-            <div style={{ fontWeight: 600, marginBottom: 6 }}>
-              Technical — {allFilters.find(f => f.id === tid)?.label}
-            </div>
+            <div style={{ fontWeight: 600, marginBottom: 6 }}>Technical — {f.label}</div>
             <Mod
-              value={filterValues[tid]}
-              onChange={(v: any) => setFilterValues(s => ({ ...s, [tid]: v }))}
+              value={state.filterValues[tid]}
+              onChange={(v: any) => state.setFilterValues((s: any) => ({ ...s, [tid]: v }))}
             />
           </div>
         );
       })}
 
+
       {/* Actions */}
-      <div style={{ marginTop: 12, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-        <button onClick={run} disabled={loading} style={{ padding: '8px 14px' }}>
-          {loading ? 'Loading…' : 'Run'}
+      <div style={{ marginTop: 12, display: 'flex', gap: 8 }}>
+        <button onClick={actions.run} disabled={state.loading}>
+          {state.loading ? 'Loading…' : 'Run'}
         </button>
         <button
           onClick={() => {
-            setFilterValues({ 'base.exchange': { value: 'NASDAQ' }, 'base.sector': { value: '' } });
-            setFundamentalSel('');
-            setTechnicalSel('');
+            state.setFilterValues({ 'base.exchange': { value: 'NASDAQ' }, 'base.sector': { value: '' } });
+            state.setFundamentalSel([]);
+            state.setTechnicalSel([]);
           }}
-          style={{ padding: '8px 14px' }}
         >
-          Reset Filters
+          Reset
         </button>
       </div>
+
 
       {/* Save Rule */}
       <div style={{ marginTop: 16, padding: 12, border: '1px solid #e2e8f0', borderRadius: 12 }}>
         <div style={{ fontWeight: 600, marginBottom: 8 }}>Save current filters as a Rule</div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
           <input
-            value={ruleName}
-            onChange={(e) => setRuleName(e.target.value)}
-            placeholder="Rule name (e.g., Large Caps up ≥5% / 20d + RSI≤30)"
+            value={state.ruleName}
+            onChange={(e) => state.setRuleName(e.target.value)}
+            placeholder="Rule name (e.g., Large Caps up ≥5% / 20d + PER≤15 + RSI≤30)"
             style={{ flex: '1 1 320px', padding: 8, border: '1px solid #cbd5e1', borderRadius: 8 }}
           />
-          <button onClick={saveCurrentRule} disabled={saving} style={{ padding: '8px 14px' }}>
-            {saving ? 'Saving…' : 'Save Rule'}
+          <button onClick={actions.saveRule} disabled={state.saving}>
+            {state.saving ? 'Saving…' : 'Save Rule'}
           </button>
         </div>
       </div>
+
 
       {/* My Rules */}
       <div style={{ marginTop: 16, padding: 12, border: '1px solid #e2e8f0', borderRadius: 12 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
           <div style={{ fontWeight: 600 }}>My Rules</div>
-          <button onClick={loadRules} disabled={loadingRules} style={{ padding: '6px 10px' }}>
-            {loadingRules ? 'Refreshing…' : 'Refresh'}
+          <button onClick={actions.loadRules} disabled={state.loadingRules}>
+            {state.loadingRules ? 'Refreshing…' : 'Refresh'}
           </button>
         </div>
-        {rulesError && <div style={{ color: '#b91c1c', marginTop: 8 }}>Error: {rulesError}</div>}
+        {state.rulesError && <div style={{ color: '#b91c1c', marginTop: 8 }}>Error: {state.rulesError}</div>}
         <div style={{ marginTop: 8, overflowX: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-            <thead style={{ position: 'sticky', top: 0, background: '#f8fafc', zIndex: 1 }}>
+            <thead>
               <tr style={{ textAlign: 'left', borderBottom: '1px solid #e5e7eb' }}>
-                <th style={{ padding: 10 }}>Symbol</th>
-                <th style={{ padding: 10 }}>Company</th>
-                <th style={{ padding: 10 }}>Sector</th>
-                <th style={{ padding: 10, textAlign: 'right' }}>Price (Daily %)</th>
-
-
-                {showMarketCap && <th style={{ padding: 10, textAlign: 'right' }}>Market Cap</th>}
-                {showPER && <th style={{ padding: 10, textAlign: 'right' }}>PER</th>}
-                {showRSI && <th style={{ padding: 10, textAlign: 'right' }}>RSI</th>}
-                {showNDays && <th style={{ padding: 10, textAlign: 'right' }}>
-                  {priceChangeVal?.days ? `Price Δ (${priceChangeVal.days}d)` : 'Price Δ (N‑days)'}
-                </th>}
-
-
-                <th style={{ padding: 10 }}>Explain</th>
+                <th style={{ padding: 8 }}>Name</th>
+                <th style={{ padding: 8 }}>Updated</th>
+                <th style={{ padding: 8 }}>Actions</th>
               </tr>
             </thead>
-
             <tbody>
-              {rules.map((r) => (
+              {state.rules.map((r) => (
                 <tr key={r.id} style={{ borderBottom: '1px solid #f1f5f9' }}>
                   <td style={{ padding: 8 }}>
                     <a
                       href="#"
-                      onClick={(e) => {
-                        e.preventDefault();
-                        applyRuleAndRun(r);
-                      }}
+                      onClick={(e) => { e.preventDefault(); actions.applyRuleAndRun(r); }}
                       style={{ color: '#2563eb', textDecoration: 'none' }}
-                      onMouseEnter={(e) => (e.currentTarget.style.textDecoration = 'underline')}
-                      onMouseLeave={(e) => (e.currentTarget.style.textDecoration = 'none')}
-                      title="Click to apply this rule and run"
                     >
                       {r.name}
                     </a>
                   </td>
                   <td style={{ padding: 8, color: '#64748b' }}>{new Date(r.updatedAt).toLocaleString()}</td>
                   <td style={{ padding: 8, display: 'flex', gap: 8 }}>
-                    <button onClick={() => openViewModal(r)} title="View rule details" style={{ padding: '6px 10px' }}>
+                    <button onClick={() => actions.openViewModal(r)} title="View rule details">
                       View
                     </button>
-                    <button onClick={() => deleteRule(r.id)} title="Delete rule" style={{ padding: '6px 10px' }}>
+                    <button onClick={() => actions.deleteRule(r.id)} title="Delete rule">
                       Delete
                     </button>
                   </td>
                 </tr>
               ))}
-              {rules.length === 0 && !loadingRules && (
+              {state.rules.length === 0 && !state.loadingRules && (
                 <tr>
-                  <td colSpan={3} style={{ padding: 8, color: '#64748b' }}>
-                    No saved rules yet.
-                  </td>
+                  <td colSpan={3} style={{ padding: 8, color: '#64748b' }}>No saved rules yet.</td>
                 </tr>
               )}
             </tbody>
@@ -873,139 +562,131 @@ export default function Page() {
         </div>
       </div>
 
-      {err && (
+
+      {state.err && (
         <div style={{ marginTop: 10, color: '#b91c1c', background: '#fee2e2', padding: 8, borderRadius: 8 }}>
-          Error: {err}
+          Error: {state.err}
         </div>
       )}
 
-      {/* Results */}
+
+      {/* Results table */}
       <div style={{ marginTop: 16, overflowX: 'auto', border: '1px solid #e2e8f0', borderRadius: 12 }}>
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
           <thead style={{ position: 'sticky', top: 0, background: '#f8fafc', zIndex: 1 }}>
             <tr style={{ textAlign: 'left', borderBottom: '1px solid #e5e7eb' }}>
-              {[
-                { key: 'symbol', label: 'Symbol' },
-                { key: 'companyName', label: 'Company' },
-                { key: 'price', label: priceColTitle, right: true },
-                { key: 'marketCap', label: 'Market Cap', right: true },
-                { key: 'sector', label: 'Sector' }
-              ].map((c: any) => (
-                <th
-                  key={c.key}
-                  style={{ padding: 10, cursor: 'pointer', textAlign: c.right ? 'right' : 'left' }}
-                  title="Click to sort"
-                  onClick={() => {
-                    const k = c.key as SortKey;
-                    if (sortKey === k) setSortDir(sortDir === 'asc' ? 'desc' : 'asc');
-                    else {
-                      setSortKey(k);
-                      setSortDir(k === 'symbol' || k === 'companyName' || k === 'sector' ? 'asc' : 'desc');
-                    }
-                  }}
-                >
-                  {c.label} {sortKey === c.key ? (sortDir === 'asc' ? '▲' : '▼') : ''}
+              <th style={{ padding: 10 }}>Symbol</th>
+              <th style={{ padding: 10 }}>Company</th>
+              <th style={{ padding: 10 }}>Sector</th>
+              <th style={{ padding: 10, textAlign: 'right' }}>Price (Daily %)</th>
+
+
+              {state.fundamentalSel.includes('base.marketCap') && <th style={{ padding: 10, textAlign: 'right' }}>Market Cap</th>}
+              {state.fundamentalSel.includes('fa.per') && <th style={{ padding: 10, textAlign: 'right' }}>PER</th>}
+              {state.technicalSel.includes('ti.rsi') && <th style={{ padding: 10, textAlign: 'right' }}>RSI</th>}
+              {!!state.filterValues['pv.priceChangePctN'] && (
+                <th style={{ padding: 10, textAlign: 'right' }}>
+                  {state.filterValues['pv.priceChangePctN']?.days ? `Price Δ (${state.filterValues['pv.priceChangePctN'].days}d)` : 'Price Δ (N‑days)'}
                 </th>
-              ))}
-              <th style={{ padding: 10, textAlign: 'right' }}>RSI</th>
-              <th style={{ padding: 10, textAlign: 'right' }}>Volume</th>
+              )}
+
+
               <th style={{ padding: 10 }}>Explain</th>
             </tr>
           </thead>
           <tbody>
-            {pageRows.map((r) => {
-              const pct = r.priceChangePct;
-              const color =
-                typeof pct === 'number'
-                  ? (pct > 0 ? '#ef4444' : pct < 0 ? '#2563eb' : undefined)
-                  : undefined;
-              const priceCell = priceChangeVal?.days
-                ? `${formatUsd(r.price)} (${formatPct(pct)})`
-                : formatUsd(r.price);
-              const rsiColor =
-                typeof r.rsi === 'number'
-                  ? (r.rsi <= 30 ? '#2563eb' : r.rsi >= 70 ? '#ef4444' : undefined)
-                  : undefined;
+            {useMemo(() => state.rows, [state.rows]) && ( // ensure stable map
+              (state.rows as Row[]).length === 0 && !state.loading && !state.err
+                ? (
+                  <tr>
+                    <td colSpan={8} style={{ padding: 16, color: '#6b7280' }}>
+                      No results. Adjust filters and press <b>Run</b>.
+                    </td>
+                  </tr>
+                )
+                : useResultsView(state).pageRows.map((r: Row) => {
+                    const daily = r.dailyChangePct;
+                    const dailyColor =
+                      typeof daily === 'number'
+                        ? (daily > 0 ? '#ef4444' : daily < 0 ? '#2563eb' : undefined)
+                        : undefined;
+                    const dailyTxt = typeof daily === 'number' ? ` (${daily.toFixed(2)}%)` : '';
 
-              return (
-                <tr key={r.symbol} style={{ borderBottom: '1px solid #f1f5f9' }}>
-                  <td style={{ padding: 10 }}>{r.symbol}</td>
-                  <td style={{ padding: 10 }}>{r.companyName ?? '—'}</td>
-                  <td style={{ padding: 10 }}>{r.sector ?? '—'}</td>
-                  {/* Price with daily % */}
-                  {(() => {
-                    const pct = r.dailyChangePct;
-                    const color = typeof pct === 'number' ? (pct > 0 ? '#ef4444' : pct < 0 ? '#2563eb' : undefined) : undefined;
-                    const pctTxt = typeof pct === 'number' ? ` (${pct.toFixed(2)}%)` : '';
+
                     return (
-                      <td style={{ padding: 10, textAlign: 'right', color }}>
-                        {formatUsd(r.price)}
-                        {pctTxt}
-                      </td>
+                      <tr key={r.symbol} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                        <td style={{ padding: 10 }}>{r.symbol}</td>
+                        <td style={{ padding: 10 }}>{r.companyName ?? '—'}</td>
+                        <td style={{ padding: 10 }}>{r.sector ?? '—'}</td>
+                        <td style={{ padding: 10, textAlign: 'right', color: dailyColor }}>
+                          {formatUsd(r.price)}
+                          {dailyTxt}
+                        </td>
+
+
+                        {state.fundamentalSel.includes('base.marketCap') && (
+                          <td style={{ padding: 10, textAlign: 'right' }}>${formatInt(r.marketCap)}</td>
+                        )}
+                        {state.fundamentalSel.includes('fa.per') && (
+                          <td style={{ padding: 10, textAlign: 'right' }}>
+                            {typeof r.per === 'number' ? r.per.toFixed(2) : '—'}
+                          </td>
+                        )}
+                        {state.technicalSel.includes('ti.rsi') && (
+                          <td style={{ padding: 10, textAlign: 'right' }}>
+                            {typeof r.rsi === 'number' ? r.rsi.toFixed(2) : '—'}
+                          </td>
+                        )}
+                        {!!state.filterValues['pv.priceChangePctN'] && (
+                          <td style={{ padding: 10, textAlign: 'right' }}>
+                            {typeof r.priceChangePct === 'number' ? `${r.priceChangePct.toFixed(2)}%` : '—'}
+                          </td>
+                        )}
+
+
+                        <td style={{ padding: 10 }}>
+                          {Array.isArray(r.explain) ? (
+                            <button
+                              onClick={() => {
+                                state.setExplainRow(r);
+                                state.setExplainOpen(true);
+                              }}
+                            >
+                              Explain
+                            </button>
+                          ) : (
+                            <span style={{ color: '#94a3b8' }}>—</span>
+                          )}
+                        </td>
+                      </tr>
                     );
-                  })()}
-
-
-                  {showMarketCap && <td style={{ padding: 10, textAlign: 'right' }}>${formatInt(r.marketCap)}</td>}
-                  {showPER && (
-                    <td style={{ padding: 10, textAlign: 'right' }}>
-                      {typeof r.per === 'number' ? r.per.toFixed(2) : '—'}
-                    </td>
-                  )}
-                  {showRSI && (
-                    <td style={{ padding: 10, textAlign: 'right', color: typeof r.rsi === 'number' ? (r.rsi <= 30 ? '#2563eb' : r.rsi >= 70 ? '#ef4444' : undefined) : undefined }}>
-                      {typeof r.rsi === 'number' ? r.rsi.toFixed(2) : '—'}
-                    </td>
-                  )}
-                  {showNDays && (
-                    <td style={{ padding: 10, textAlign: 'right', color: typeof r.priceChangePct === 'number' ? (r.priceChangePct > 0 ? '#ef4444' : r.priceChangePct < 0 ? '#2563eb' : undefined) : undefined }}>
-                      {typeof r.priceChangePct === 'number' ? `${r.priceChangePct.toFixed(2)}%` : '—'}
-                    </td>
-                  )}
-
-
-                  {/* Explain */}
-                  <td style={{ padding: 10 }}>
-                    {Array.isArray(r.explain) ? (
-                      <button onClick={() => { setExplainRow(r); setExplainOpen(true); }}>Explain</button>
-                    ) : (
-                      <span style={{ color: '#94a3b8' }}>—</span>
-                    )}
-                  </td>
-                </tr>
-
-              );
-            })}
-            {!loading && pageRows.length === 0 && !err && (
-              <tr>
-                <td colSpan={8} style={{ padding: 16, color: '#6b7280' }}>
-                  No results. Adjust filters and press <b>Run</b>.
-                </td>
-              </tr>
+                  })
             )}
           </tbody>
         </table>
       </div>
 
-      {/* Client pagination + server "More" */}
+
+      {/* Pagination + More */}
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 12, flexWrap: 'wrap' }}>
-        <button onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page <= 1}>
+        <button onClick={() => state.setPage((p: number) => Math.max(1, p - 1))} disabled={state.page <= 1}>
           Prev
         </button>
         <div style={{ fontSize: 12, color: '#64748b' }}>
-          Page {page} / {totalPages}
+          Page {state.page} / {useResultsView(state).totalPages}
         </div>
-        <button onClick={() => setPage((p) => p + 1)} disabled={page >= totalPages}>
+        <button onClick={() => state.setPage((p: number) => p + 1)} disabled={state.page >= useResultsView(state).totalPages}>
           Next
         </button>
         <span style={{ flex: '1 0 12px' }} />
-        <button onClick={loadMore} disabled={loading || !hasMore} style={{ padding: '8px 14px' }}>
-          {hasMore ? (loading ? 'Loading…' : 'More (next 50)') : 'No more'}
+        <button onClick={actions.loadMore} disabled={!state.hasMore || state.loading} style={{ padding: '8px 14px' }}>
+          {state.hasMore ? (state.loading ? 'Loading…' : 'More (next 50)') : 'No more'}
         </button>
       </div>
 
+
       {/* View Rule Modal */}
-      {viewOpen && viewData && (
+      {state.viewOpen && state.viewData && (
         <div
           role="dialog"
           aria-modal="true"
@@ -1018,7 +699,7 @@ export default function Page() {
             justifyContent: 'center',
             padding: 16
           }}
-          onClick={() => setViewOpen(false)}
+          onClick={() => state.setViewOpen(false)}
         >
           <div
             style={{
@@ -1038,21 +719,21 @@ export default function Page() {
                 justifyContent: 'space-between'
               }}
             >
-              <div style={{ fontWeight: 700 }}>{viewData.name}</div>
-              <button onClick={() => setViewOpen(false)} style={{ padding: '6px 10px' }}>
+              <div style={{ fontWeight: 700 }}>{state.viewData.name}</div>
+              <button onClick={() => state.setViewOpen(false)} style={{ padding: '6px 10px' }}>
                 Close
               </button>
             </div>
             <div style={{ padding: 16 }}>
               <dl style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-                {Object.entries(viewData.fields).map(([k, v]) => (
+                {Object.entries(state.viewData.fields).map(([k, v]) => (
                   <div key={k} style={{ display: 'contents' }}>
                     <dt style={{ color: '#64748b' }}>{k}</dt>
                     <dd style={{ textAlign: 'right' }}>{v}</dd>
                   </div>
                 ))}
               </dl>
-              {Object.keys(viewData.fields).length === 0 && (
+              {Object.keys(state.viewData.fields).length === 0 && (
                 <div style={{ color: '#64748b' }}>No parameters set for this rule.</div>
               )}
             </div>
@@ -1065,7 +746,7 @@ export default function Page() {
                 gap: 8
               }}
             >
-              <button onClick={() => setViewOpen(false)} style={{ padding: '8px 14px' }}>
+              <button onClick={() => state.setViewOpen(false)} style={{ padding: '8px 14px' }}>
                 OK
               </button>
             </div>
@@ -1073,8 +754,9 @@ export default function Page() {
         </div>
       )}
 
+
       {/* Explain Modal */}
-      {explainOpen && explainRow && (
+      {state.explainOpen && state.explainRow && (
         <div
           role="dialog"
           aria-modal="true"
@@ -1087,7 +769,7 @@ export default function Page() {
             justifyContent: 'center',
             padding: 16
           }}
-          onClick={() => setExplainOpen(false)}
+          onClick={() => state.setExplainOpen(false)}
         >
           <div
             style={{
@@ -1107,13 +789,13 @@ export default function Page() {
                 justifyContent: 'space-between'
               }}
             >
-              <div style={{ fontWeight: 700 }}>Why did {explainRow.symbol} match?</div>
-              <button onClick={() => setExplainOpen(false)} style={{ padding: '6px 10px' }}>
+              <div style={{ fontWeight: 700 }}>Why did {state.explainRow.symbol} match?</div>
+              <button onClick={() => state.setExplainOpen(false)} style={{ padding: '6px 10px' }}>
                 Close
               </button>
             </div>
             <div style={{ padding: 16 }}>
-              {Array.isArray(explainRow.explain) ? (
+              {Array.isArray(state.explainRow.explain) ? (
                 <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                   <thead>
                     <tr style={{ textAlign: 'left', borderBottom: '1px solid #e5e7eb' }}>
@@ -1123,7 +805,7 @@ export default function Page() {
                     </tr>
                   </thead>
                   <tbody>
-                    {explainRow.explain.map((e, idx) => (
+                    {state.explainRow.explain.map((e, idx) => (
                       <tr key={idx} style={{ borderBottom: '1px solid #f1f5f9' }}>
                         <td style={{ padding: 8 }}>{e.id}</td>
                         <td style={{ padding: 8 }}>{e.value ?? '—'}</td>
@@ -1144,7 +826,7 @@ export default function Page() {
                 justifyContent: 'flex-end'
               }}
             >
-              <button onClick={() => setExplainOpen(false)} style={{ padding: '8px 14px' }}>
+              <button onClick={() => state.setExplainOpen(false)} style={{ padding: '8px 14px' }}>
                 OK
               </button>
             </div>
@@ -1154,4 +836,6 @@ export default function Page() {
     </main>
   );
 }
+
+
 
