@@ -13,7 +13,7 @@
     "paths": {
       "@/*": ["./*"],
       "@/filters": ["lib/filters/index"],
-      "@/types": ["lib/types"],
+      "@/types": ["lib/types/index"],
       "@/screener": ["lib/screener/*"]
 }
 
