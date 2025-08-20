@@ -4,61 +4,43 @@ import type {
   QueryPlan,
   BaseFilter,
   HistoricalFilter,
-  TechnicalFilterRSI
-} from './types';
-
+  TechnicalFilterRSI,
+} from '@/types';
 
 /**
- * compileRule: walk the AST and produce a concrete QueryPlan
- * that the executor can run efficiently.
- *
- * Notes:
- * - For fmpParam values that are already part of BaseFilter
- *   (exchange, sector, marketCapMoreThan, marketCapLowerThan),
- *   we use a strongly-typed emitter.
- * - For new/extended base params like peMoreThan / peLowerThan,
- *   we emit them via a generic emitter with a safe cast, so you
- *   don't have to immediately expand BaseFilter in types.ts.
+ * We extend the plan with a small "post" bucket for filters that
+ * the upstream screener cannot handle (e.g., PER).
  */
-export function compileRule(ast: RuleAST): QueryPlan {
-  const plan: QueryPlan = { base: [], historical: [], technical: [] };
+export type PostFilter =
+  | { kind: 'per'; op: 'lte' | 'gte'; value: number };
 
+export type CompiledPlan = QueryPlan & { post: PostFilter[] };
 
-  /** Strongly-typed emitter for known BaseFilter params */
+/**
+ * compileRule
+ * Walks the AST and produces a plan the executor can run.
+ * - base.*  -> /stock-screener params
+ * - pv.*    -> historical (computed by executor)
+ * - ti.*    -> technical indicators (executor)
+ * - per     -> post (server-side filter; screener can't handle pe)
+ */
+export function compileRule(ast: RuleAST): CompiledPlan {
+  const plan: CompiledPlan = { base: [], historical: [], technical: [], post: [] };
+
+  // Simple de-dupe emitter for known BaseFilter params
   function emitBaseKnown(param: BaseFilter) {
     const idx = plan.base.findIndex((b) => b.fmpParam === param.fmpParam);
-    if (idx >= 0) {
-      plan.base[idx] = param;
-    } else {
-      plan.base.push(param);
-    }
+    if (idx >= 0) plan.base[idx] = param;
+    else plan.base.push(param);
   }
 
-
-  /**
-   * Generic emitter for custom / extended base params (e.g., PER).
-   * This lets you add new screener params without changing types.ts immediately.
-   */
-  function emitBaseGeneric(name: string, value: string | number) {
-    const idx = plan.base.findIndex((b: any) => b.fmpParam === name);
-    const obj = { fmpParam: name, value } as unknown as BaseFilter;
-    if (idx >= 0) {
-      (plan.base as unknown as any[])[idx] = obj;
-    } else {
-      (plan.base as unknown as any[]).push(obj);
-    }
-  }
-
-
-  function visit(node: RuleAST) {
+  function visit(node?: RuleAST) {
     if (!node) return;
-
 
     if (node.type === 'condition') {
       const { id, params = {} } = node;
 
-
-      // ---------- Base filters (direct FMP screener params) ----------
+      // ---------- base.* → screener params ----------
       if (id === 'base.exchange' && typeof params.value === 'string') {
         emitBaseKnown({ fmpParam: 'exchange', value: params.value });
         return;
@@ -76,75 +58,58 @@ export function compileRule(ast: RuleAST): QueryPlan {
         return;
       }
 
-
-      // PER (P/E) — use generic emitter so you don't need to change BaseFilter union
+      // ---------- PER (server-side post filter; screener has no pe param) ----------
       if (id === 'base.peMoreThan' && typeof params.value === 'number') {
-        emitBaseGeneric('peMoreThan', params.value);
+        plan.post.push({ kind: 'per', op: 'gte', value: params.value });
         return;
       }
       if (id === 'base.peLowerThan' && typeof params.value === 'number') {
-        emitBaseGeneric('peLowerThan', params.value);
+        plan.post.push({ kind: 'per', op: 'lte', value: params.value });
         return;
       }
 
-
-      // ---------- Historical computed filters ----------
-      if (id === 'pv.priceChangePctN') {
-        const days = Number(params.days);
-        const pct = Number(params.pct);
-        if (Number.isFinite(days) && Number.isFinite(pct) && days > 0) {
-          const h: HistoricalFilter = { kind: 'priceChangePctNDays', days, pct };
-          plan.historical.push(h);
-        }
+      // ---------- historical: priceChange N days (support gte / lte via params.op) ----------
+      if (id === 'pv.priceChangePctN' && typeof params.pct === 'number' && typeof params.days === 'number') {
+        const op = params.op === 'lte' ? 'lte' : 'gte';
+        // @ts-expect-error extend HistoricalFilter with op at runtime
+        plan.historical.push({ kind: 'priceChangePctNDays', days: params.days, pct: params.pct, op } as HistoricalFilter);
         return;
       }
-      if (id === 'pv.volumeChangePctN') {
-        const days = Number(params.days);
-        const pct = Number(params.pct);
-        if (Number.isFinite(days) && Number.isFinite(pct) && days > 0) {
-          const h: HistoricalFilter = { kind: 'volumeChangePctNDays', days, pct };
-          plan.historical.push(h);
-        }
+
+      // (If you also support volumeChangePctN, add it here)
+      if (id === 'pv.volumeChangePctN' && typeof params.pct === 'number' && typeof params.days === 'number') {
+        // @ts-expect-error matching your executor’s expectation
+        plan.historical.push({ kind: 'volumeChangePctNDays', days: params.days, pct: params.pct } as HistoricalFilter);
         return;
       }
-      
 
-      // ---------- Technical filters (RSI) ----------
+      // ---------- technical: RSI ----------
       if (id === 'ti.rsi') {
         const tf = (params.timeframe ?? 'daily') as TechnicalFilterRSI['timeframe'];
         const period = Number(params.period ?? 14);
         const op = (params.op ?? 'lte') as 'lte' | 'gte';
         const value = Number(params.value);
         if (Number.isFinite(period) && Number.isFinite(value)) {
-          const t: TechnicalFilterRSI = { kind: 'rsi', timeframe: tf, period, op, value };
-          plan.technical.push(t);
+          plan.technical.push({ kind: 'rsi', timeframe: tf, period, op, value });
         }
         return;
       }
 
-
-      // Unknown condition ID: ignore safely
+      // Unknown condition → ignore safely
       return;
     }
 
-
-    // Boolean nodes (AND/OR/NOT) — visit children
-    if ((node.type === 'AND' || node.type === 'OR' || node.type === 'NOT') && Array.isArray((node as any).children)) {
+    if (('children' in node) && Array.isArray((node as any).children)) {
       (node as any).children.forEach(visit);
     }
   }
 
-
   visit(ast);
 
-
-  // Default exchange if none provided
+  // default exchange if none provided
   if (!plan.base.some((b) => b.fmpParam === 'exchange')) {
-    plan.base.push({ fmpParam: 'exchange', value: 'NASDAQ' } as BaseFilter);
+    plan.base.push({ fmpParam: 'exchange', value: 'NASDAQ' });
   }
-
 
   return plan;
 }
-
-
