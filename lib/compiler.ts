@@ -1,4 +1,3 @@
-// lib/compiler.ts
 import type {
   RuleAST,
   QueryPlan,
@@ -27,7 +26,6 @@ export type CompiledPlan = QueryPlan & { post: PostFilter[] };
 export function compileRule(ast: RuleAST): CompiledPlan {
   const plan: CompiledPlan = { base: [], historical: [], technical: [], post: [] };
 
-  // Simple de-dupe emitter for known BaseFilter params
   function emitBaseKnown(param: BaseFilter) {
     const idx = plan.base.findIndex((b) => b.fmpParam === param.fmpParam);
     if (idx >= 0) plan.base[idx] = param;
@@ -58,7 +56,7 @@ export function compileRule(ast: RuleAST): CompiledPlan {
         return;
       }
 
-      // ---------- PER (server-side post filter; screener has no pe param) ----------
+      // ---------- PER (server-side post filter) ----------
       if (id === 'base.peMoreThan' && typeof params.value === 'number') {
         plan.post.push({ kind: 'per', op: 'gte', value: params.value });
         return;
@@ -68,18 +66,16 @@ export function compileRule(ast: RuleAST): CompiledPlan {
         return;
       }
 
-      // ---------- historical: priceChange N days (support gte / lte via params.op) ----------
+      // ---------- historical: priceChange N days (supports gte / lte) ----------
       if (id === 'pv.priceChangePctN' && typeof params.pct === 'number' && typeof params.days === 'number') {
         const op = params.op === 'lte' ? 'lte' : 'gte';
-        // @ts-expect-error extend HistoricalFilter with op at runtime
-        plan.historical.push({ kind: 'priceChangePctNDays', days: params.days, pct: params.pct, op } as HistoricalFilter);
+        plan.historical.push({ kind: 'priceChangePctNDays', days: params.days, pct: params.pct, op } as any);
         return;
       }
 
-      // (If you also support volumeChangePctN, add it here)
+      // ---------- historical: volumeChange (optional) ----------
       if (id === 'pv.volumeChangePctN' && typeof params.pct === 'number' && typeof params.days === 'number') {
-        // @ts-expect-error matching your executor’s expectation
-        plan.historical.push({ kind: 'volumeChangePctNDays', days: params.days, pct: params.pct } as HistoricalFilter);
+        plan.historical.push({ kind: 'volumeChangePctNDays', days: params.days, pct: params.pct } as any);
         return;
       }
 
@@ -94,12 +90,9 @@ export function compileRule(ast: RuleAST): CompiledPlan {
         }
         return;
       }
-
-      // Unknown condition → ignore safely
-      return;
     }
 
-    if (('children' in node) && Array.isArray((node as any).children)) {
+    if ('children' in (node as any) && Array.isArray((node as any).children)) {
       (node as any).children.forEach(visit);
     }
   }
