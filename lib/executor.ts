@@ -177,18 +177,23 @@ export async function executePlan(
       return null;
     }
   });
-  // --- Enrich PER for symbols that still don't have it ---
+ // --- Enrich PER for symbols that still don't have it ---
   const missingPer = rows.filter(r => typeof r.per !== 'number').map(r => r.symbol);
 
 
-  // Limit concurrency to be polite (reuse your pLimit if present)
-  const perLimiter = pLimit ? pLimit(MAX_CONCURRENCY, fetchCompanyPER) : null;
+  // Define a typed runner that will always be callable
+  type PERFn = (symbol: string, apiKey: string) => Promise<{ symbol: string; per?: number }>;
+
+
+  // If you have a pLimit helper available, wrap fetchCompanyPER with it; otherwise use fetchCompanyPER directly.
+  const perRunner: PERFn =
+    (typeof pLimit === 'function')
+      ? (pLimit(MAX_CONCURRENCY, fetchCompanyPER) as unknown as PERFn)
+      : fetchCompanyPER;
 
 
   if (missingPer.length) {
-    const perFetches = missingPer.map(sym =>
-      limit ? perLimiter(sym, apiKey) : fetchCompanyPER(sym, apiKey)
-    );
+    const perFetches = missingPer.map((sym) => perRunner(sym, apiKey));
     const perResults = await Promise.allSettled(perFetches);
 
 
@@ -204,6 +209,7 @@ export async function executePlan(
       }
     }
   }
+
 
   const settledRSI = await Promise.allSettled(afterHistorical.map((r) => runRSI(r)));
   const filteredRSI: (ScreenerRow & { explain?: Explain[] })[] = [];
