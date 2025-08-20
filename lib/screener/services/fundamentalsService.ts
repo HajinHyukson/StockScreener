@@ -13,10 +13,12 @@
 
 const FMP_BASE = 'https://financialmodelingprep.com/api/v3';
 
+export type PEResult = { symbol: string; per?: number };
+
 // ---------- Tiny in-memory cache ----------
 type CacheEntry = { per?: number; expires: number };
 const perCache = new Map<string, CacheEntry>();
-const DEFAULT_TTL = Number(process.env.FMP_PER_TTL_SECONDS ?? 300); // 5 minutes by default
+const DEFAULT_TTL = Number(process.env.FMP_PER_TTL_SECONDS ?? 300); // 5 minutes
 
 function now() { return Date.now(); }
 function cacheKey(symbol: string) { return symbol.trim().toUpperCase(); }
@@ -40,7 +42,7 @@ async function fetchJSON(url: string) {
   return r.json();
 }
 
-// ---------- Key extractors (defensive against key name drift) ----------
+// ---------- Key extractors (defensive) ----------
 function extractPEFromKeyMetricsTTM(arr: any[]): number | undefined {
   if (!Array.isArray(arr) || arr.length === 0) return undefined;
   const first = arr[0];
@@ -56,7 +58,6 @@ function extractPEFromRatiosTTM(arr: any[]): number | undefined {
   return undefined;
 }
 function extractPEFromProfile(arr: any[]): number | undefined {
-  // /profile returns an array with one object
   if (!Array.isArray(arr) || arr.length === 0) return undefined;
   const first = arr[0];
   if (typeof first?.pe === 'number') return first.pe;
@@ -66,20 +67,12 @@ function extractPEFromProfile(arr: any[]): number | undefined {
 }
 
 // ---------- Public API ----------
-export type PEResult = { symbol: string; per?: number };
-
-/**
- * Fetch a single company's PER (P/E), with small TTL caching.
- */
 export async function fetchCompanyPER(symbol: string, apiKey: string): Promise<PEResult> {
   const sym = symbol.trim().toUpperCase();
 
   // cache check
   const cached = getCachedPER(sym);
   if (typeof cached === 'number') return { symbol: sym, per: cached };
-  if (cached === undefined) {
-    // undefined may be a cached "miss" too; we only cache hits by default
-  }
 
   // 1) Key Metrics TTM
   try {
@@ -90,9 +83,7 @@ export async function fetchCompanyPER(symbol: string, apiKey: string): Promise<P
       setCachedPER(sym, peKm);
       return { symbol: sym, per: peKm };
     }
-  } catch {
-    // ignore and fall through
-  }
+  } catch {}
 
   // 2) Ratios TTM
   try {
@@ -103,11 +94,9 @@ export async function fetchCompanyPER(symbol: string, apiKey: string): Promise<P
       setCachedPER(sym, peRt);
       return { symbol: sym, per: peRt };
     }
-  } catch {
-    // ignore and fall through
-  }
+  } catch {}
 
-  // 3) Profile (slightly heavier; good last resort)
+  // 3) Profile
   try {
     const pfURL = `${FMP_BASE}/profile/${encodeURIComponent(sym)}?apikey=${apiKey}`;
     const pfJson = await fetchJSON(pfURL);
@@ -116,68 +105,42 @@ export async function fetchCompanyPER(symbol: string, apiKey: string): Promise<P
       setCachedPER(sym, pePf);
       return { symbol: sym, per: pePf };
     }
-  } catch {
-    // ignore
-  }
+  } catch {}
 
-  // No PE found
-  // (You can cache the miss with a very short TTL if you want; we skip by default.)
   return { symbol: sym, per: undefined };
 }
 
-/**
- * Batch helper: fetch PER for many symbols with bounded concurrency.
- * Returns a map { symbol -> per? } for quick merging back into rows.
- */
+/** Batch helper with bounded concurrency */
 export async function fetchManyCompanyPER(
   symbols: string[],
   apiKey: string,
   concurrency = Number(process.env.MAX_CONCURRENCY ?? 6)
 ): Promise<Map<string, number>> {
   const results = new Map<string, number>();
-  const todo = symbols
-    .map(s => s.trim().toUpperCase())
-    .filter((s, i, arr) => !!s && arr.indexOf(s) === i); // unique & non-empty
+  const uniq = Array.from(new Set(symbols.map(s => s.trim().toUpperCase()))).filter(Boolean);
 
   // quick cache pass
   const pending: string[] = [];
-  for (const s of todo) {
+  for (const s of uniq) {
     const c = getCachedPER(s);
-    if (typeof c === 'number') {
-      results.set(s, c);
-    } else {
-      pending.push(s);
-    }
+    if (typeof c === 'number') results.set(s, c);
+    else pending.push(s);
   }
   if (pending.length === 0) return results;
 
-  // p-limit
-  let active = 0;
-  const queue = [...pending];
-  const runNext = (): Promise<void> =>
-    new Promise((resolve) => {
-      const step = async () => {
-        if (queue.length === 0) return resolve();
-        const take = queue.splice(0, Math.max(1, Math.floor(pending.length / concurrency) || 1));
-        active++;
-        try {
-          await Promise.all(
-            take.map(async (sym) => {
-              const r = await fetchCompanyPER(sym, apiKey);
-              if (typeof r.per === 'number') results.set(sym, r.per);
-            })
-          );
-        } finally {
-          active--;
-          if (queue.length > 0) step();
-          else resolve();
-        }
-      };
-      step();
-    });
+  // naive limiter
+  let i = 0;
+  async function worker() {
+    while (i < pending.length) {
+      const sym = pending[i++];
+      try {
+        const { per } = await fetchCompanyPER(sym, apiKey);
+        if (typeof per === 'number') results.set(sym, per);
+      } catch {}
+    }
+  }
 
-  // Kick off up to `concurrency` runners
-  const runners = Array.from({ length: Math.min(concurrency, pending.length) }, () => runNext());
-  await Promise.all(runners);
+  const workers = Math.min(concurrency, pending.length);
+  await Promise.all(Array.from({ length: workers }, worker));
   return results;
 }
