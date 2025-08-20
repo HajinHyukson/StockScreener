@@ -3,16 +3,15 @@ import type {
   QueryPlan,
   ScreenerRow,
   TechnicalFilterRSI,
-} from './types';
+} from '@/types';
 
-import { fetchHistorical, computePriceChangePctNDays, computeVolumeChangePctNDays } from './historical';
-import { fetchRSI } from './technical';
-import { fetchCompanyPER } from './screener/services/fundamentalsService';
+import { fetchHistorical, computePriceChangePctNDays, computeVolumeChangePctNDays } from '@/screener/historical';
+import { fetchRSI } from '@/screener/technical';
+import { fetchCompanyPER } from '@/screener/services/fundamentalsService';
 
-// ===== Concurrency =====
 const MAX_CONCURRENCY = Number(process.env.MAX_CONCURRENCY ?? 6);
 
-/** Minimal p-limit with proper Awaited typing */
+/** Minimal p-limit with proper typing (no nested Promise) */
 function pLimit<T extends (...args: any[]) => any>(concurrency: number, fn: T) {
   let active = 0;
   const queue: Array<() => void> = [];
@@ -34,7 +33,7 @@ function pLimit<T extends (...args: any[]) => any>(concurrency: number, fn: T) {
     });
 }
 
-// ===== Helpers =====
+/** Build /stock-screener URL from plan.base */
 function buildScreenerUrl(base: QueryPlan['base'], limit: number, apiKey: string): string {
   const params = new URLSearchParams();
   for (const b of base) params.set(b.fmpParam, String(b.value));
@@ -45,6 +44,7 @@ function buildScreenerUrl(base: QueryPlan['base'], limit: number, apiKey: string
 
 type Explain = { id: string; pass: boolean; value?: string };
 
+/** Convert screener payload row -> ScreenerRow (robust keys) */
 function mapScreenerRow(raw: any): ScreenerRow {
   // daily % change can be numeric or "1.23%"
   let dailyPct: number | undefined;
@@ -55,7 +55,7 @@ function mapScreenerRow(raw: any): ScreenerRow {
     if (m) dailyPct = Number(m[0]);
   }
 
-  // PER under different keys
+  // PER / P-E ratio under different keys
   const pe =
     typeof raw.pe === 'number' ? raw.pe :
     typeof raw.priceEarningsRatio === 'number' ? raw.priceEarningsRatio :
@@ -74,7 +74,14 @@ function mapScreenerRow(raw: any): ScreenerRow {
   };
 }
 
-// ===== Executor =====
+/**
+ * Execute the plan:
+ *  1) /stock-screener for base filters
+ *  2) historical filters (priceChangePctNDays with op, volumeChange optional)
+ *  3) technical RSI
+ *  4) enrich PER when missing
+ *  5) apply post filters (PER gte/lte)
+ */
 export async function executePlan(
   plan: QueryPlan & { post?: Array<{ kind: 'per'; op: 'lte' | 'gte'; value: number }> },
   limit: number,
@@ -94,11 +101,10 @@ export async function executePlan(
     return r;
   });
 
-  // Skip if nothing else to do
   const needHistorical = plan.historical?.length > 0;
   const needTechnical = plan.technical?.length > 0;
 
-  // 2) Historical filters (priceChange/volumeChange)
+  // 2) Historical filters (price change ≥/≤, volume optional)
   if (needHistorical) {
     const maxDays = Math.max(0, ...plan.historical.map((h: any) => (typeof h.days === 'number' ? h.days : 0)));
 
@@ -140,7 +146,7 @@ export async function executePlan(
   if (needTechnical) {
     const rsiFilters = (plan.technical || []).filter((t: any) => t.kind === 'rsi') as TechnicalFilterRSI[];
     if (rsiFilters.length) {
-      const rf = rsiFilters[0]; // extend to AND multiple if needed
+      const rf = rsiFilters[0]; // extend to AND if needed
       const runRSI = pLimit(MAX_CONCURRENCY, async (row: ScreenerRow & { explain?: Explain[] }) => {
         try {
           const data = await fetchRSI(row.symbol, rf.timeframe, rf.period, apiKey);
@@ -163,7 +169,7 @@ export async function executePlan(
     }
   }
 
-  // 4) Enrich PER where missing
+  // 4) Enrich PER for rows missing it
   {
     const missing = rows.filter(r => typeof r.per !== 'number').map(r => r.symbol);
     if (missing.length) {
@@ -195,7 +201,7 @@ export async function executePlan(
     }
   }
 
-  // Finish
+  // Done
   rows.forEach(r => { if ((r as any).__raw) delete (r as any).__raw; });
   return rows;
 }
