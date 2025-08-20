@@ -595,73 +595,72 @@ export default function Page() {
             </tr>
           </thead>
           <tbody>
-            {useMemo(() => state.rows, [state.rows]) && ( // ensure stable map
-              (state.rows as Row[]).length === 0 && !state.loading && !state.err
-                ? (
-                  <tr>
-                    <td colSpan={8} style={{ padding: 16, color: '#6b7280' }}>
-                      No results. Adjust filters and press <b>Run</b>.
+            {(view.pageRows.length === 0 && !state.loading && !state.err) ? (
+            <tr>
+              <td colSpan={8} style={{ padding: 16, color: '#6b7280' }}>
+                No results. Adjust filters and press <b>Run</b>.
+              </td>
+            </tr>
+           ) : (
+            view.pageRows.map((r: Row) => {
+              const daily = r.dailyChangePct;
+              const dailyColor =
+                typeof daily === 'number'
+                  ? (daily > 0 ? '#ef4444' : daily < 0 ? '#2563eb' : undefined)
+                  : undefined;
+              const dailyTxt = typeof daily === 'number' ? ` (${daily.toFixed(2)}%)` : '';
+
+
+              return (
+                <tr key={r.symbol} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                  <td style={{ padding: 10 }}>{r.symbol}</td>
+                  <td style={{ padding: 10 }}>{r.companyName ?? '—'}</td>
+                  <td style={{ padding: 10 }}>{r.sector ?? '—'}</td>
+                  <td style={{ padding: 10, textAlign: 'right', color: dailyColor }}>
+                    {formatUsd(r.price)}
+                    {dailyTxt}
+                  </td>
+
+
+                  {state.fundamentalSel.includes('base.marketCap') && (
+                    <td style={{ padding: 10, textAlign: 'right' }}>${formatInt(r.marketCap)}</td>
+                  )}
+                  {state.fundamentalSel.includes('fa.per') && (
+                    <td style={{ padding: 10, textAlign: 'right' }}>
+                      {typeof r.per === 'number' ? r.per.toFixed(2) : '—'}
                     </td>
-                  </tr>
-                )
-                : useResultsView(state).pageRows.map((r: Row) => {
-                    const daily = r.dailyChangePct;
-                    const dailyColor =
-                      typeof daily === 'number'
-                        ? (daily > 0 ? '#ef4444' : daily < 0 ? '#2563eb' : undefined)
-                        : undefined;
-                    const dailyTxt = typeof daily === 'number' ? ` (${daily.toFixed(2)}%)` : '';
+                  )}
+                  {state.technicalSel.includes('ti.rsi') && (
+                    <td style={{ padding: 10, textAlign: 'right' }}>
+                      {typeof r.rsi === 'number' ? r.rsi.toFixed(2) : '—'}
+                    </td>
+                  )}
+                  {!!state.filterValues['pv.priceChangePctN'] && (
+                    <td style={{ padding: 10, textAlign: 'right' }}>
+                      {typeof r.priceChangePct === 'number' ? `${r.priceChangePct.toFixed(2)}%` : '—'}
+                    </td>
+                  )}
 
 
-                    return (
-                      <tr key={r.symbol} style={{ borderBottom: '1px solid #f1f5f9' }}>
-                        <td style={{ padding: 10 }}>{r.symbol}</td>
-                        <td style={{ padding: 10 }}>{r.companyName ?? '—'}</td>
-                        <td style={{ padding: 10 }}>{r.sector ?? '—'}</td>
-                        <td style={{ padding: 10, textAlign: 'right', color: dailyColor }}>
-                          {formatUsd(r.price)}
-                          {dailyTxt}
-                        </td>
+                  <td style={{ padding: 10 }}>
+                    {Array.isArray(r.explain) ? (
+                      <button
+                        onClick={() => {
+                          state.setExplainRow(r);
+                          state.setExplainOpen(true);
+                        }}
+                      >
+                        Explain
+                      </button>
+                    ) : (
+                      <span style={{ color: '#94a3b8' }}>—</span>
+                    )}
+                  </td>
+                </tr>
+              );
+            })
+          )}
 
-
-                        {state.fundamentalSel.includes('base.marketCap') && (
-                          <td style={{ padding: 10, textAlign: 'right' }}>${formatInt(r.marketCap)}</td>
-                        )}
-                        {state.fundamentalSel.includes('fa.per') && (
-                          <td style={{ padding: 10, textAlign: 'right' }}>
-                            {typeof r.per === 'number' ? r.per.toFixed(2) : '—'}
-                          </td>
-                        )}
-                        {state.technicalSel.includes('ti.rsi') && (
-                          <td style={{ padding: 10, textAlign: 'right' }}>
-                            {typeof r.rsi === 'number' ? r.rsi.toFixed(2) : '—'}
-                          </td>
-                        )}
-                        {!!state.filterValues['pv.priceChangePctN'] && (
-                          <td style={{ padding: 10, textAlign: 'right' }}>
-                            {typeof r.priceChangePct === 'number' ? `${r.priceChangePct.toFixed(2)}%` : '—'}
-                          </td>
-                        )}
-
-
-                        <td style={{ padding: 10 }}>
-                          {Array.isArray(r.explain) ? (
-                            <button
-                              onClick={() => {
-                                state.setExplainRow(r);
-                                state.setExplainOpen(true);
-                              }}
-                            >
-                              Explain
-                            </button>
-                          ) : (
-                            <span style={{ color: '#94a3b8' }}>—</span>
-                          )}
-                        </td>
-                      </tr>
-                    );
-                  })
-            )}
           </tbody>
         </table>
       </div>
@@ -672,12 +671,15 @@ export default function Page() {
         <button onClick={() => state.setPage((p: number) => Math.max(1, p - 1))} disabled={state.page <= 1}>
           Prev
         </button>
-        <div style={{ fontSize: 12, color: '#64748b' }}>
-          Page {state.page} / {useResultsView(state).totalPages}
-        </div>
-        <button onClick={() => state.setPage((p: number) => p + 1)} disabled={state.page >= useResultsView(state).totalPages}>
-          Next
-        </button>
+       <div style={{ fontSize: 12, color: '#64748b' }}>
+        Page {state.page} / {view.totalPages}
+      </div>
+      <button
+        onClick={() => state.setPage((p: number) => p + 1)}
+        disabled={state.page >= view.totalPages}
+      >
+        Next
+      </button>
         <span style={{ flex: '1 0 12px' }} />
         <button onClick={actions.loadMore} disabled={!state.hasMore || state.loading} style={{ padding: '8px 14px' }}>
           {state.hasMore ? (state.loading ? 'Loading…' : 'More (next 50)') : 'No more'}
