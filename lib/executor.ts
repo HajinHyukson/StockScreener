@@ -5,7 +5,7 @@ import type {
   TechnicalFilterRSI
 } from './types';
 import { fetchRSI } from './technical';
-import { fetchCompanyPER } from './services/fundamentalsService';
+import { fetchCompanyPER } from './screener/services/fundamentalsService';
 // If you already have these utilities, keep your existing ones:
 import {
   fetchHistorical,                    // (symbol, maxDays, apiKey) => price/volume series
@@ -182,12 +182,12 @@ export async function executePlan(
 
 
   // Limit concurrency to be polite (reuse your pLimit if present)
-  const limit = pLimit ? pLimit(MAX_CONCURRENCY, fetchCompanyPER) : null;
+  const perLimiter = pLimit ? pLimit(MAX_CONCURRENCY, fetchCompanyPER) : null;
 
 
   if (missingPer.length) {
     const perFetches = missingPer.map(sym =>
-      limit ? limit(sym, apiKey) : fetchCompanyPER(sym, apiKey)
+      limit ? perLimiter(sym, apiKey) : fetchCompanyPER(sym, apiKey)
     );
     const perResults = await Promise.allSettled(perFetches);
 
