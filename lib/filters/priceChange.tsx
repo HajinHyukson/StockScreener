@@ -34,9 +34,10 @@ export const priceChangeFilter: FilterModule = {
     const pct = Number(v?.pct);
     const days = Number(v?.days);
     if (Number.isFinite(pct) && Number.isFinite(days) && days > 0) {
-      return [{ type: 'condition', id: 'pv.priceChangePctN', params: { pct, days } }];
-    }
-    return [];
+      return [{
+    type: 'condition',
+    id: `pv.priceChangePctN.${op}`,   // e.g. "pv.priceChangePctN.gte" or "pv.priceChangePctN.lte"
+    params: { days, pct }
   },
 
   fromAST: (ast: RuleAST) =>
@@ -53,3 +54,4 @@ export const priceChangeFilter: FilterModule = {
     return out;
   }
 };
+
