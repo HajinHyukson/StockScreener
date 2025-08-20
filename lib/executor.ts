@@ -85,8 +85,8 @@ export async function executePlan(
   if (!res.ok) throw new Error(`Screener ${res.status}`);
   const baseRows = (await res.json()) as any[];
 
-  const rows: (ScreenerRow & { explain?: Explain[] })[] = baseRows.map((r) => {
-  // FMP screener often returns `changesPercentage` as a number or string like "1.23%"
+  const rows: (ScreenerRow & { explain?: Explain[] })[] = baseRows.map((r: any) => {
+  // Daily % change can be numeric or a string like "1.23%"
   let dailyPct: number | undefined = undefined;
   if (typeof r.changesPercentage === 'number') {
     dailyPct = r.changesPercentage;
@@ -95,6 +95,13 @@ export async function executePlan(
     if (m) dailyPct = Number(m[0]);
   }
 
+  // PER (P/E) can appear under different keys depending on endpoint variations
+  const pe =
+    typeof r.pe === 'number' ? r.pe :
+    typeof r.priceEarningsRatio === 'number' ? r.priceEarningsRatio :
+    typeof r.peRatio === 'number' ? r.peRatio :
+    undefined;
+
 
   return {
     symbol: r.symbol,
@@ -102,9 +109,11 @@ export async function executePlan(
     price: r.price,
     sector: r.sector,
     volume: r.volume,
+
+
     marketCap: r.marketCap,
-    per: typeof r.pe === 'number' ? r.pe : undefined,   // ← attach PER if present
-    dailyChangePct: dailyPct                            // ← attach daily change %
+    per: pe,                      // ← ensure PER is attached
+    dailyChangePct: dailyPct,     // ← for the price column "($xxx (y%))"
   };
 });
 
