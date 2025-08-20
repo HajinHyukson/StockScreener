@@ -1,2 +1,2 @@
 export * from '../executor';
-import { fetchCompanyPER } from './servicves/fundamentalsService';
+import { fetchCompanyPER } from './services/fundamentalsService';
