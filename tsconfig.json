@@ -1,7 +1,11 @@
 {
   "compilerOptions": {
     "target": "ESNext",
-    "lib": ["dom", "dom.iterable", "esnext"],
+    "lib": [
+      "dom",
+      "dom.iterable",
+      "esnext"
+    ],
     "allowJs": true,
     "skipLibCheck": true,
     "strict": true,
@@ -16,13 +20,30 @@
     "incremental": true,
     "baseUrl": ".",
     "paths": {
-      "@/*": ["./*"],
-      "@/types": ["lib/types"],
-      "@/filters": ["lib/filters/index"],
-      "@/screener/*": ["lib/screener/*"],
-      "@/components/*": ["app/components/*"],
-      "@/utils/*": ["lib/utils/*"]
-    }
+      "@/*": [
+        "./*"
+      ],
+      "@/types": [
+        "lib/types"
+      ],
+      "@/filters": [
+        "lib/filters/index"
+      ],
+      "@/screener/*": [
+        "lib/screener/*"
+      ],
+      "@/components/*": [
+        "app/components/*"
+      ],
+      "@/utils/*": [
+        "lib/utils/*"
+      ]
+    },
+    "plugins": [
+      {
+        "name": "next"
+      }
+    ]
   },
   "include": [
     "next-env.d.ts",
@@ -30,5 +51,7 @@
     "**/*.tsx",
     ".next/types/**/*.ts"
   ],
-  "exclude": ["node_modules"]
+  "exclude": [
+    "node_modules"
+  ]
 }
